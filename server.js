@@ -11,18 +11,11 @@ const CFE_URL = "https://app.cfe.mx/Aplicaciones/CCFE/ReciboDeLuzGMX/Consulta";
 // ============================================================
 // CONFIGURACIÓN - DECODO
 // ============================================================
-const PROXY_PORTS = [10001, 10002, 10003, 10004];
-let currentPortIndex = 0;
-
-function getProxyConfig() {
-  const port = PROXY_PORTS[currentPortIndex % PROXY_PORTS.length];
-  currentPortIndex++;
-  return {
-    server: `http://gate.decodo.com:${port}`,
-    username: 'spp9625kp7',
-    password: 'w3rn85=sdkit1JSjIP'  // ← Cambia por tu contraseña real
-  };
-}
+const PROXY_CONFIG = {
+  server: 'http://gate.decodo.com:10002',
+  username: 'spp9625kp7',
+  password: 'H$0m5nla79S...'  // ← CAMBIA por tu contraseña real
+};
 
 // ============================================================
 // MIDDLEWARE
@@ -54,12 +47,11 @@ app.get("/health", (req, res) => res.json({ ok: true }));
 app.get("/proxy-test", async (req, res) => {
   let browser;
   try {
-    const config = getProxyConfig();
-    console.log("🔄 Probando proxy:", config.server);
+    console.log("🔄 Probando proxy...");
     
     browser = await chromium.launch({
       headless: true,
-      proxy: config,
+      proxy: PROXY_CONFIG,
       args: ["--no-sandbox", "--disable-setuid-sandbox"]
     });
     
@@ -71,7 +63,6 @@ app.get("/proxy-test", async (req, res) => {
     res.json({
       ok: true,
       ip: JSON.parse(content).ip,
-      proxy: config.server,
       mensaje: "✅ Proxy funcionando"
     });
   } catch (error) {
@@ -81,21 +72,11 @@ app.get("/proxy-test", async (req, res) => {
 });
 
 // ============================================================
-// FUNCIÓN PARA LLENAR CAMPOS CON SEGURIDAD
+// FUNCIÓN PARA LLENAR CAMPOS
 // ============================================================
 async function safeFill(page, selector, value, timeout = 10000) {
   try {
-    // Esperar a que el campo exista y sea visible
     await page.waitForSelector(selector, { state: 'visible', timeout });
-    
-    // Verificar que el campo está habilitado
-    const isDisabled = await page.locator(selector).getAttribute('disabled');
-    if (isDisabled) {
-      console.log(`⚠️ Campo ${selector} está deshabilitado, omitiendo`);
-      return false;
-    }
-    
-    // Limpiar y llenar
     await page.locator(selector).clear();
     await page.locator(selector).fill(value);
     console.log(`✅ Llenado: ${selector}`);
@@ -104,6 +85,21 @@ async function safeFill(page, selector, value, timeout = 10000) {
     console.log(`⚠️ No se pudo llenar ${selector}: ${error.message}`);
     return false;
   }
+}
+
+// ============================================================
+// FUNCIÓN PARA OBTENER EL MES/AÑO DEL RECIBO
+// ============================================================
+function getMesBuscado() {
+  // CFE muestra el recibo del mes anterior al actual
+  const fecha = new Date();
+  fecha.setMonth(fecha.getMonth() - 1);
+  
+  const meses = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+  const mes = meses[fecha.getMonth()];
+  const anio = fecha.getFullYear();
+  
+  return `${mes} ${anio}`;
 }
 
 // ============================================================
@@ -116,182 +112,146 @@ app.post("/obtener-recibo", async (request, response) => {
   }
 
   let browser;
-  let proxyConfig;
 
   try {
-    const maxAttempts = PROXY_PORTS.length;
-    let lastError = null;
+    console.log("🔄 Abriendo navegador con proxy...");
+    
+    browser = await chromium.launch({
+      headless: true,
+      proxy: PROXY_CONFIG,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-blink-features=AutomationControlled"
+      ],
+    });
 
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      proxyConfig = getProxyConfig();
-      console.log(`🔄 Intento ${attempt + 1} con proxy: ${proxyConfig.server}`);
-      
-      try {
-        browser = await chromium.launch({
-          headless: true,
-          proxy: proxyConfig,
-          args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-blink-features=AutomationControlled"
-          ],
-        });
+    const context = await browser.newContext({
+      acceptDownloads: true,
+      locale: "es-MX",
+      viewport: { width: 1920, height: 1080 },
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    });
 
-        const context = await browser.newContext({
-          acceptDownloads: true,
-          locale: "es-MX",
-          viewport: { width: 1920, height: 1080 },
-          userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        });
+    const page = await context.newPage();
+    page.setDefaultTimeout(60000);
 
-        const page = await context.newPage();
-        page.setDefaultTimeout(60000);
+    // ============================================================
+    // 1. IR A CFE
+    // ============================================================
+    console.log("🌐 Navegando a CFE...");
+    const navigationResponse = await page.goto(CFE_URL, {
+      waitUntil: "networkidle",
+      timeout: 60000,
+    });
 
-        // ============================================================
-        // 1. IR A CFE
-        // ============================================================
-        console.log("🌐 Navegando a CFE...");
-        const navigationResponse = await page.goto(CFE_URL, {
-          waitUntil: "networkidle",  // ← Cambiado a networkidle
-          timeout: 60000,
-        });
+    const statusCode = navigationResponse?.status() ?? 0;
+    console.log(`CFE STATUS: ${statusCode}`);
 
-        const statusCode = navigationResponse?.status() ?? 0;
-        console.log(`CFE STATUS: ${statusCode}`);
+    if (statusCode >= 400) {
+      throw new Error(`CFE respondió con estado ${statusCode}`);
+    }
 
-        if (statusCode >= 400) {
-          throw new Error(`CFE respondió con estado ${statusCode}`);
-        }
+    const pageTitle = await page.title();
+    console.log(`CFE TITLE: ${pageTitle}`);
 
-        const pageTitle = await page.title();
-        console.log(`CFE TITLE: ${pageTitle}`);
+    // ============================================================
+    // 2. VERIFICAR FORMULARIO
+    // ============================================================
+    const nombreField = page.locator("#MainContent_txtNombre");
+    const nombreCount = await nombreField.count();
+    console.log(`CAMPO NOMBRE ENCONTRADO: ${nombreCount}`);
 
-        // ============================================================
-        // 2. VERIFICAR QUE EL FORMULARIO EXISTA
-        // ============================================================
-        const nombreField = page.locator("#MainContent_txtNombre");
-        const nombreCount = await nombreField.count();
-        console.log(`CAMPO NOMBRE ENCONTRADO: ${nombreCount}`);
+    if (nombreCount === 0) {
+      throw new Error("El formulario de CFE no apareció.");
+    }
 
-        if (nombreCount === 0) {
-          throw new Error("El formulario de CFE no apareció.");
-        }
+    await page.waitForTimeout(2000);
 
-        // Esperar un momento para que la página se estabilice
-        await page.waitForTimeout(2000);
+    // ============================================================
+    // 3. LLENAR FORMULARIO
+    // ============================================================
+    console.log("📝 Llenando formulario...");
 
-        // ============================================================
-        // 3. LLENAR FORMULARIO
-        // ============================================================
-        console.log("📝 Llenando formulario...");
+    await safeFill(page, "#MainContent_txtNombre", parsed.data.nombreCompleto);
+    await safeFill(page, "#MainContent_txtRPU", parsed.data.numeroServicio);
+    await safeFill(page, "#MainContent_tbLada", parsed.data.lada);
+    await safeFill(page, "#MainContent_txtTel", parsed.data.telefonoFijo);
+    await safeFill(page, "#MainContent_txtCel", parsed.data.celular);
+    await safeFill(page, "#MainContent_txtCorreoElectronico", parsed.data.correo);
 
-        // Intentar llenar cada campo
-        await safeFill(page, "#MainContent_txtNombre", parsed.data.nombreCompleto);
-        await safeFill(page, "#MainContent_txtRPU", parsed.data.numeroServicio);
-        await safeFill(page, "#MainContent_tbLada", parsed.data.lada);
-        await safeFill(page, "#MainContent_txtTel", parsed.data.telefonoFijo);
-        await safeFill(page, "#MainContent_txtCel", parsed.data.celular);
-        await safeFill(page, "#MainContent_txtCorreoElectronico", parsed.data.correo);
+    // ============================================================
+    // 4. ENVIAR FORMULARIO
+    // ============================================================
+    console.log("🔄 Enviando formulario...");
+    
+    const continuarBtn = page.locator('#MainContent_btnContinuar');
+    await continuarBtn.waitFor({ state: "visible", timeout: 10000 });
+    await continuarBtn.click();
 
-        // ============================================================
-        // 4. DETECTAR CAPTCHA
-        // ============================================================
-        const captchaCount = await page.locator([
-          "iframe[src*='captcha']", "iframe[src*='recaptcha']", ".g-recaptcha",
-          "[id*='captcha' i]", "[class*='captcha' i]"
-        ].join(",")).count();
+    // ============================================================
+    // 5. ESPERAR RESULTADOS Y BUSCAR MES
+    // ============================================================
+    console.log("⏳ Esperando resultados...");
+    
+    await page.waitForSelector('#MainContent_GVHistorial', { timeout: 30000 });
+    console.log("✅ Tabla de recibos cargada");
 
-        if (captchaCount > 0) {
-          return response.status(409).json({ error: "Verificación humana solicitada." });
-        }
+    // Obtener el mes que buscamos (ej: "jun 2026")
+    const mesBuscado = getMesBuscado();
+    console.log(`🔍 Buscando recibo de: ${mesBuscado}`);
 
-        // ============================================================
-        // 5. ENVIAR FORMULARIO
-        // ============================================================
-        console.log("🔄 Enviando formulario...");
-        
-        await Promise.all([
-          page.waitForLoadState("networkidle").catch(() => null),
-          page.locator("#MainContent_btnContinuar").click(),
-        ]);
-
-        // ============================================================
-        // 6. ESPERAR RESULTADOS
-        // ============================================================
-        console.log("⏳ Esperando resultados...");
-        
-        const pdfSelector = 'input[id^="MainContent_GVHistorial_DescargaPDF_"]';
-        
-        try {
-          await page.locator(pdfSelector).first().waitFor({ 
-            state: "visible", 
-            timeout: 60000 
-          });
-          console.log("✅ Resultados cargados");
-        } catch (error) {
-          console.log("❌ No se encontraron resultados");
-          
-          // Verificar si hay mensaje de error
-          const errorMessage = await page.locator([
-            ".validation-summary-errors",
-            ".field-validation-error",
-            "[id*='lblMensaje']",
-            "[class*='error']"
-          ].join(",")).textContent().catch(() => null);
-          
-          if (errorMessage && errorMessage.trim()) {
-            return response.status(404).json({ 
-              error: errorMessage.trim() 
-            });
-          }
-          
-          throw new Error("No se encontraron recibos para los datos proporcionados.");
-        }
-
-        // ============================================================
-        // 7. DESCARGAR PDF
-        // ============================================================
-        console.log("📄 Descargando PDF...");
-        
-        const downloadPromise = page.waitForEvent("download", { timeout: 60000 });
-        await page.locator(pdfSelector).first().click();
-        const download = await downloadPromise;
-        const downloadPath = await download.path();
-
-        if (!downloadPath) throw new Error("No se generó el archivo.");
-
-        const pdfBuffer = await fs.readFile(downloadPath);
-        
-        // Verificar que es PDF válido
-        if (pdfBuffer.length < 4 || pdfBuffer.subarray(0, 4).toString() !== "%PDF") {
-          throw new Error("El archivo no es un PDF válido.");
-        }
-
-        await browser.close();
-        console.log(`✅ PDF obtenido correctamente (${pdfBuffer.length} bytes)`);
-
-        // Devolver PDF
-        response.setHeader("Content-Type", "application/pdf");
-        response.setHeader("Content-Disposition", `attachment; filename="recibo-${parsed.data.numeroServicio}.pdf"`);
-        response.setHeader("Cache-Control", "no-store, max-age=0");
-        return response.status(200).send(pdfBuffer);
-
-      } catch (error) {
-        console.error(`❌ Error con proxy ${proxyConfig.server}:`, error.message);
-        lastError = error;
-        if (browser) {
-          await browser.close().catch(() => {});
-          browser = null;
-        }
-        continue;
+    // Buscar la fila con ese mes
+    const filas = await page.locator('#MainContent_GVHistorial tr').all();
+    
+    let filaEncontrada = null;
+    for (let i = 0; i < filas.length; i++) {
+      const texto = await filas[i].textContent();
+      if (texto && texto.includes(mesBuscado)) {
+        filaEncontrada = filas[i];
+        console.log(`✅ Encontrado: ${mesBuscado}`);
+        break;
       }
     }
 
-    throw new Error(`Todos los proxies fallaron. Último error: ${lastError?.message || 'Desconocido'}`);
+    if (!filaEncontrada) {
+      // Si no encuentra el mes, intentar con el primer recibo visible
+      console.log(`⚠️ No se encontró ${mesBuscado}, tomando el primer recibo`);
+      filaEncontrada = filas[1]; // Saltar header
+    }
+
+    // ============================================================
+    // 6. DESCARGAR PDF
+    // ============================================================
+    console.log("📄 Descargando PDF...");
+    
+    const downloadBtn = filaEncontrada.locator('input[type="image"][title="Descarga Pdf"]');
+    await downloadBtn.waitFor({ state: "visible", timeout: 5000 });
+    
+    const downloadPromise = page.waitForEvent("download", { timeout: 60000 });
+    await downloadBtn.click();
+    const download = await downloadPromise;
+    const downloadPath = await download.path();
+
+    if (!downloadPath) throw new Error("No se generó el archivo.");
+
+    const pdfBuffer = await fs.readFile(downloadPath);
+    
+    if (pdfBuffer.length < 4 || pdfBuffer.subarray(0, 4).toString() !== "%PDF") {
+      throw new Error("El archivo no es un PDF válido.");
+    }
+
+    await browser.close();
+    console.log(`✅ PDF obtenido correctamente (${pdfBuffer.length} bytes)`);
+
+    response.setHeader("Content-Type", "application/pdf");
+    response.setHeader("Content-Disposition", `attachment; filename="recibo-${parsed.data.numeroServicio}.pdf"`);
+    response.setHeader("Cache-Control", "no-store, max-age=0");
+    return response.status(200).send(pdfBuffer);
 
   } catch (error) {
-    console.error("Error final:", error);
+    console.error("❌ Error:", error);
     if (browser) await browser.close().catch(() => {});
     if (!response.headersSent) {
       return response.status(500).json({
