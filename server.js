@@ -16,15 +16,11 @@ const CFE_URL =
 
 app.use(
   cors({
-    origin:
-      ALLOWED_ORIGIN === "*"
-        ? true
-        : ALLOWED_ORIGIN,
-    methods: ["GET", "POST"],
+    origin: true,
+    methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type"],
   }),
 );
-
 app.use(
   express.json({
     limit: "20kb",
