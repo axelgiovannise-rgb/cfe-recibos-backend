@@ -11,23 +11,10 @@ const CFE_URL = "https://app.cfe.mx/Aplicaciones/CCFE/ReciboDeLuzGMX/Consulta";
 // ============================================================
 // CONFIGURACIÓN - DECODO (3GB COMPRADOS)
 // ============================================================
-// 🔑 CREDENCIALES DE DECODO
 const PROXY_USERNAME = "spp9625kp7";
-const PROXY_PASSWORD = "w3rn85=sdkit1JSjIP";  // ← VERIFICA TU CONTRASEÑA
+const PROXY_PASSWORD = "w3rn85=sdkit1JSjIP";
 
-// Puertos de Decodo (rotación automática)
 const PROXY_PORTS = [10000, 10001, 10002, 10003];
-let currentPortIndex = 0;
-
-function getProxyConfig() {
-  const port = PROXY_PORTS[currentPortIndex % PROXY_PORTS.length];
-  currentPortIndex++;
-  return {
-    server: `http://gate.decodo.com:${port}`,
-    username: PROXY_USERNAME,
-    password: PROXY_PASSWORD,
-  };
-}
 
 // ============================================================
 // MIDDLEWARE
@@ -58,8 +45,12 @@ app.get("/health", (req, res) => res.json({ ok: true }));
 // ============================================================
 app.get("/proxy-test", async (req, res) => {
   let browser;
-  const config = getProxyConfig();
   try {
+    const config = {
+      server: `http://gate.decodo.com:10000`,
+      username: PROXY_USERNAME,
+      password: PROXY_PASSWORD,
+    };
     console.log(`🔄 Probando proxy: ${config.server}`);
     browser = await chromium.launch({
       headless: true,
@@ -106,7 +97,32 @@ async function probarProxy(config) {
 }
 
 // ============================================================
-// FUNCIÓN PARA ENCONTRAR PROXY FUNCIONANDO
+// FUNCIÓN PARA PROBAR CFE CON UN PROXY
+// ============================================================
+async function probarCFE(config) {
+  let browser;
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      proxy: config,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+    const page = await browser.newPage();
+    const response = await page.goto(CFE_URL, {
+      timeout: 30000,
+      waitUntil: "networkidle",
+    });
+    await browser.close();
+    const status = response?.status() || 0;
+    return { ok: status === 200, status };
+  } catch (error) {
+    if (browser) await browser.close().catch(() => {});
+    return { ok: false, status: 0, error: error.message };
+  }
+}
+
+// ============================================================
+// FUNCIÓN PARA ENCONTRAR PROXY QUE FUNCIONE CON CFE
 // ============================================================
 async function encontrarProxyFuncionando() {
   const puertosMezclados = [...PROXY_PORTS].sort(() => Math.random() - 0.5);
@@ -117,15 +133,27 @@ async function encontrarProxyFuncionando() {
       username: PROXY_USERNAME,
       password: PROXY_PASSWORD,
     };
-    const resultado = await probarProxy(config);
-    if (resultado.ok) {
-      console.log(`✅ Proxy encontrado: ${config.server} (IP: ${resultado.ip})`);
-      return resultado;
+    
+    console.log(`🔄 Probando CFE con puerto ${puerto}...`);
+    
+    // 1. Probar que el proxy funciona
+    const resultadoProxy = await probarProxy(config);
+    if (!resultadoProxy.ok) {
+      console.log(`❌ Proxy ${config.server} no responde`);
+      continue;
     }
-    console.log(`❌ Proxy ${config.server} falló`);
+    
+    // 2. Probar que CFE responde con 200
+    const resultadoCFE = await probarCFE(config);
+    if (resultadoCFE.ok) {
+      console.log(`✅ Proxy encontrado: ${config.server} (IP: ${resultadoProxy.ip})`);
+      return { proxy: config, ip: resultadoProxy.ip };
+    }
+    
+    console.log(`❌ Proxy ${config.server} funciona pero CFE bloquea (${resultadoCFE.status})`);
   }
 
-  throw new Error("❌ No se encontró ningún proxy funcionando.");
+  throw new Error("❌ No se encontró ningún proxy que funcione con CFE.");
 }
 
 // ============================================================
@@ -195,7 +223,7 @@ app.post("/obtener-recibo", async (request, response) => {
   let proxyConfig;
 
   try {
-    console.log("🔍 Buscando proxy Decodo funcionando...");
+    console.log("🔍 Buscando proxy Decodo que funcione con CFE...");
     const resultado = await encontrarProxyFuncionando();
     proxyConfig = resultado.proxy;
     console.log(`🔑 Usando proxy: ${proxyConfig.server} (IP: ${resultado.ip})`);
@@ -327,6 +355,6 @@ app.post("/obtener-recibo", async (request, response) => {
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`✅ Servidor activo en el puerto ${PORT}`);
-  console.log(`🔑 Proxy: Decodo (3GB)`);
-  console.log(`🔄 Modo: Reconexión automática (${PROXY_PORTS.length} puertos)`);
+  console.log(`🔑 Proxy: Decodo (3GB) - Rotación automática`);
+  console.log(`🔄 Modo: Busca IP que funcione con CFE (${PROXY_PORTS.length} puertos)`);
 });
