@@ -20,7 +20,7 @@ function getProxyConfig() {
   return {
     server: `http://gate.decodo.com:${port}`,
     username: 'spp9625kp7',
-    password: 'H$0m5nla79S...'  // ← Verifica tu contraseña exacta
+    password: 'w3rn85=sdkit1JSjIP'  // ← Verifica tu contraseña exacta
   };
 }
 
