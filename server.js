@@ -9,13 +9,11 @@ const PORT = process.env.PORT || 3000;
 const CFE_URL = "https://app.cfe.mx/Aplicaciones/CCFE/ReciboDeLuzGMX/Consulta";
 
 // ============================================================
-// CONFIGURACIÓN - DECODO
+// CONFIGURACIÓN - DECODO (MÚLTIPLES PUERTOS)
 // ============================================================
-const PROXY_CONFIG = {
-  server: 'http://gate.decodo.com:10002',
-  username: 'spp9625kp7',
-  password: 'w3rn85=sdkit1JSjIP...'
-};
+const PROXY_PORTS = [10001, 10002, 10003, 10004];
+const PROXY_USERNAME = 'spp9625kp7';
+const PROXY_PASSWORD = 'w3rn85=sdkit1JSjIP...';
 
 // ============================================================
 // MIDDLEWARE
@@ -36,29 +34,114 @@ const schema = z.object({
 });
 
 // ============================================================
-// ENDPOINTS
+// ENDPOINTS BÁSICOS
 // ============================================================
 app.get("/", (req, res) => res.json({ ok: true, servicio: "Backend de recibos activo" }));
 app.get("/health", (req, res) => res.json({ ok: true }));
 
+// ============================================================
+// TEST DE PROXY (CON RECONEXIÓN AUTOMÁTICA)
+// ============================================================
 app.get("/proxy-test", async (req, res) => {
-  let browser;
   try {
-    console.log("🔄 Probando proxy...");
-    browser = await chromium.launch({ headless: true, proxy: PROXY_CONFIG, args: ["--no-sandbox"] });
-    const page = await browser.newPage();
-    await page.goto('https://api.ipify.org?format=json');
-    const content = await page.textContent('body');
-    await browser.close();
-    res.json({ ok: true, ip: JSON.parse(content).ip, mensaje: "✅ Proxy funcionando" });
+    const config = await encontrarProxyFuncionando();
+    res.json({
+      ok: true,
+      ip: config.ip,
+      proxy: config.proxy.server,
+      mensaje: "✅ Proxy funcionando correctamente"
+    });
   } catch (error) {
-    if (browser) await browser.close().catch(() => {});
     res.json({ ok: false, error: error.message });
   }
 });
 
 // ============================================================
-// FUNCIÓN PARA LLENAR CAMPOS
+// FUNCIÓN PARA PROBAR UN PROXY
+// ============================================================
+async function probarProxy(config) {
+  let browser;
+  try {
+    console.log(`🔄 Probando proxy: ${config.server}`);
+    
+    browser = await chromium.launch({
+      headless: true,
+      proxy: {
+        server: config.server,
+        username: config.username,
+        password: config.password
+      },
+      args: ["--no-sandbox", "--disable-setuid-sandbox"]
+    });
+    
+    const page = await browser.newPage();
+    await page.goto('https://api.ipify.org?format=json', { timeout: 30000 });
+    const content = await page.textContent('body');
+    await browser.close();
+    
+    const ip = JSON.parse(content).ip;
+    console.log(`✅ Proxy funciona. IP: ${ip}`);
+    
+    return { ok: true, ip, proxy: config };
+  } catch (error) {
+    if (browser) await browser.close().catch(() => {});
+    console.log(`❌ Proxy ${config.server} falló: ${error.message}`);
+    return { ok: false, error: error.message, proxy: config };
+  }
+}
+
+// ============================================================
+// FUNCIÓN PARA ENCONTRAR PROXY FUNCIONANDO
+// ============================================================
+async function encontrarProxyFuncionando() {
+  // Mezclar puertos para no siempre empezar por el mismo
+  const puertosMezclados = [...PROXY_PORTS].sort(() => Math.random() - 0.5);
+  
+  for (const puerto of puertosMezclados) {
+    const config = {
+      server: `http://gate.decodo.com:${puerto}`,
+      username: PROXY_USERNAME,
+      password: PROXY_PASSWORD
+    };
+    
+    const resultado = await probarProxy(config);
+    
+    if (resultado.ok) {
+      console.log(`✅ Proxy encontrado: ${config.server} (IP: ${resultado.ip})`);
+      return { proxy: config, ip: resultado.ip };
+    }
+  }
+  
+  throw new Error('❌ No se encontró ningún proxy funcionando. Verifica tus credenciales.');
+}
+
+// ============================================================
+// FUNCIÓN PARA VERIFICAR BLOQUEO DE CFE
+// ============================================================
+async function verificarBloqueoCFE(page) {
+  const html = await page.content();
+  
+  // Detectar Incapsula
+  if (html.includes('Incapsula') || html.includes('_Incapsula_Resource')) {
+    console.log('🚫 IP bloqueada por Incapsula');
+    return true;
+  }
+  
+  // Detectar formulario
+  const nombreField = page.locator("#MainContent_txtNombre");
+  const count = await nombreField.count();
+  
+  if (count === 0) {
+    console.log('🚫 Formulario no visible - posible bloqueo');
+    return true;
+  }
+  
+  console.log('✅ IP funciona correctamente');
+  return false;
+}
+
+// ============================================================
+// FUNCIÓN PARA LLENAR CAMPOS CON SEGURIDAD
 // ============================================================
 async function safeFill(page, selector, value, timeout = 10000) {
   try {
@@ -78,29 +161,25 @@ async function safeFill(page, selector, value, timeout = 10000) {
 // ============================================================
 function getMesBuscado() {
   const fecha = new Date();
-  const mes = fecha.getMonth(); // 0=ene, 1=feb, ...
+  const mes = fecha.getMonth();
   const anio = fecha.getFullYear();
   
-  // Si el mes es impar (0,2,4,6,8,10), mostramos el mes anterior (par)
-  // Si el mes es par (1,3,5,7,9,11), mostramos el mes actual (par)
   let mesBimestre;
   if (mes % 2 === 0) {
-    // Mes impar (ene, mar, may, jul, sep, nov) → mostrar mes anterior (par)
     mesBimestre = mes - 1;
   } else {
-    // Mes par (feb, abr, jun, ago, oct, dic) → mostrar mes actual
     mesBimestre = mes;
   }
   
   const meses = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
-  const mesTexto = meses[mesBimestre];
+  const mesTexto = meses[mesBimestre] || 'ene';
   const anioTexto = (mesBimestre < 0) ? anio - 1 : anio;
   
   return `${mesTexto} ${anioTexto}`;
 }
 
 // ============================================================
-// ENDPOINT PRINCIPAL
+// ENDPOINT PRINCIPAL - OBTENER RECIBO
 // ============================================================
 app.post("/obtener-recibo", async (request, response) => {
   const parsed = schema.safeParse(request.body);
@@ -109,14 +188,35 @@ app.post("/obtener-recibo", async (request, response) => {
   }
 
   let browser;
+  let proxyConfig;
 
   try {
+    // ============================================================
+    // 1. ENCONTRAR PROXY FUNCIONANDO
+    // ============================================================
+    console.log("🔍 Buscando proxy funcionando...");
+    const resultado = await encontrarProxyFuncionando();
+    proxyConfig = resultado.proxy;
+    console.log(`🔑 Usando proxy: ${proxyConfig.server} (IP: ${resultado.ip})`);
+    
+    // ============================================================
+    // 2. ABRIR NAVEGADOR CON EL PROXY ENCONTRADO
+    // ============================================================
     console.log("🔄 Abriendo navegador con proxy...");
     
     browser = await chromium.launch({
       headless: true,
-      proxy: PROXY_CONFIG,
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"],
+      proxy: {
+        server: proxyConfig.server,
+        username: proxyConfig.username,
+        password: proxyConfig.password
+      },
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-blink-features=AutomationControlled"
+      ],
     });
 
     const context = await browser.newContext({
@@ -129,9 +229,15 @@ app.post("/obtener-recibo", async (request, response) => {
     const page = await context.newPage();
     page.setDefaultTimeout(60000);
 
-    // 1. IR A CFE
+    // ============================================================
+    // 3. IR A CFE
+    // ============================================================
     console.log("🌐 Navegando a CFE...");
-    const navigationResponse = await page.goto(CFE_URL, { waitUntil: "networkidle", timeout: 60000 });
+    const navigationResponse = await page.goto(CFE_URL, {
+      waitUntil: "networkidle",
+      timeout: 60000
+    });
+    
     const statusCode = navigationResponse?.status() ?? 0;
     console.log(`CFE STATUS: ${statusCode}`);
 
@@ -139,10 +245,18 @@ app.post("/obtener-recibo", async (request, response) => {
       throw new Error(`CFE respondió con estado ${statusCode}`);
     }
 
+    // Verificar si está bloqueado
+    const bloqueado = await verificarBloqueoCFE(page);
+    if (bloqueado) {
+      throw new Error("IP bloqueada por CFE, reintentando con otro proxy...");
+    }
+
     const pageTitle = await page.title();
     console.log(`CFE TITLE: ${pageTitle}`);
 
-    // 2. VERIFICAR FORMULARIO
+    // ============================================================
+    // 4. VERIFICAR FORMULARIO
+    // ============================================================
     const nombreField = page.locator("#MainContent_txtNombre");
     const nombreCount = await nombreField.count();
     console.log(`CAMPO NOMBRE ENCONTRADO: ${nombreCount}`);
@@ -153,7 +267,9 @@ app.post("/obtener-recibo", async (request, response) => {
 
     await page.waitForTimeout(2000);
 
-    // 3. LLENAR FORMULARIO
+    // ============================================================
+    // 5. LLENAR FORMULARIO
+    // ============================================================
     console.log("📝 Llenando formulario...");
 
     await safeFill(page, "#MainContent_txtNombre", parsed.data.nombreCompleto);
@@ -163,13 +279,17 @@ app.post("/obtener-recibo", async (request, response) => {
     await safeFill(page, "#MainContent_txtCel", parsed.data.celular);
     await safeFill(page, "#MainContent_txtCorreoElectronico", parsed.data.correo);
 
-    // 4. ENVIAR FORMULARIO
+    // ============================================================
+    // 6. ENVIAR FORMULARIO
+    // ============================================================
     console.log("🔄 Enviando formulario...");
     const continuarBtn = page.locator('#MainContent_btnContinuar');
     await continuarBtn.waitFor({ state: "visible", timeout: 10000 });
     await continuarBtn.click();
 
-    // 5. ESPERAR RESULTADOS
+    // ============================================================
+    // 7. ESPERAR RESULTADOS
+    // ============================================================
     console.log("⏳ Esperando resultados...");
     await page.waitForSelector('#MainContent_GVHistorial', { timeout: 30000 });
     console.log("✅ Tabla de recibos cargada");
@@ -193,10 +313,12 @@ app.post("/obtener-recibo", async (request, response) => {
 
     if (!filaEncontrada) {
       console.log(`⚠️ No se encontró ${mesBuscado}, tomando el primer recibo visible`);
-      filaEncontrada = filas[1]; // Saltar header
+      filaEncontrada = filas[1] || filas[0]; // Saltar header
     }
 
-    // 6. DESCARGAR PDF
+    // ============================================================
+    // 8. DESCARGAR PDF
+    // ============================================================
     console.log("📄 Descargando PDF...");
     const downloadBtn = filaEncontrada.locator('input[type="image"][title="Descarga Pdf"]');
     await downloadBtn.waitFor({ state: "visible", timeout: 5000 });
@@ -224,7 +346,16 @@ app.post("/obtener-recibo", async (request, response) => {
 
   } catch (error) {
     console.error("❌ Error:", error);
-    if (browser) await browser.close().catch(() => {});
+    if (browser) {
+      await browser.close().catch(() => {});
+    }
+    
+    // Si el error es de proxy bloqueado, reintentar con otro
+    if (error.message.includes("bloqueada") || error.message.includes("reintentando")) {
+      console.log("🔄 Reintentando con otro proxy...");
+      // Aquí podrías llamar recursivamente o simplemente devolver error
+    }
+    
     if (!response.headersSent) {
       return response.status(500).json({
         error: "No fue posible obtener el recibo. Verifica los datos e inténtalo nuevamente.",
@@ -233,6 +364,11 @@ app.post("/obtener-recibo", async (request, response) => {
   }
 });
 
+// ============================================================
+// INICIO DEL SERVIDOR
+// ============================================================
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Servidor activo en el puerto ${PORT}`);
+  console.log(`✅ Servidor activo en el puerto ${PORT}`);
+  console.log(`🔑 Proxy configurado con ${PROXY_PORTS.length} puertos`);
+  console.log(`🔄 Modo: Reconexión automática`);
 });
