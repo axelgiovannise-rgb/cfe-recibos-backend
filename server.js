@@ -9,18 +9,16 @@ const PORT = process.env.PORT || 3000;
 const CFE_URL = "https://app.cfe.mx/Aplicaciones/CCFE/ReciboDeLuzGMX/Consulta";
 
 // ============================================================
-// CONFIGURACIÓN - DECODO RESIDENCIAL (3GB)
+// CONFIGURACIÓN - SMARTPROXY (3GB)
 // ============================================================
-const PROXY_USERNAME = "spp9625kp7";
-const PROXY_PASSWORD = "w3rn85=sdkit1JSjIP";
-
-// Servidor correcto: mx.decodo.com
-const PROXY_SERVER = "mx.decodo.com";
-const PROXY_PORT = 20000;
+const PROXY_USERNAME = "spp9625kp7";  // ← CAMBIA ESTO
+const PROXY_PASSWORD = "w3rn85=sdkit1JSjIP";  // ← CAMBIA ESTO
+const PROXY_SERVER = "gate.smartproxy.com";
+const PROXY_PORT = 10000;
 
 // Configuración de reintentos
-const MAX_RETRIES = 5; // Intentos con diferentes IPs
-const RETRY_DELAY = 5000; // Espera 5 segundos entre intentos
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 3000;
 
 // ============================================================
 // MIDDLEWARE
@@ -71,7 +69,7 @@ app.get("/proxy-test", async (req, res) => {
       ok: true,
       ip: JSON.parse(content).ip,
       proxy: config.server,
-      mensaje: "✅ Proxy Decodo funcionando",
+      mensaje: "✅ Proxy SmartProxy funcionando",
     });
   } catch (error) {
     if (browser) await browser.close().catch(() => {});
@@ -115,7 +113,7 @@ function getMesBuscado() {
 }
 
 // ============================================================
-// FUNCIÓN PARA INTENTAR OBTENER EL RECIBO (CON REINTENTOS)
+// FUNCIÓN PARA INTENTAR OBTENER EL RECIBO
 // ============================================================
 async function intentarObtenerRecibo(parsed) {
   let lastError = null;
@@ -126,7 +124,6 @@ async function intentarObtenerRecibo(parsed) {
     let browser = null;
     
     try {
-      // 1. Configurar el proxy
       const config = {
         server: `http://${PROXY_SERVER}:${PROXY_PORT}`,
         username: PROXY_USERNAME,
@@ -135,7 +132,6 @@ async function intentarObtenerRecibo(parsed) {
       
       console.log(`🔑 Usando proxy: ${config.server}`);
       
-      // 2. Lanzar navegador
       browser = await chromium.launch({
         headless: true,
         proxy: config,
@@ -157,7 +153,6 @@ async function intentarObtenerRecibo(parsed) {
       const page = await context.newPage();
       page.setDefaultTimeout(60000);
 
-      // 3. IR A CFE
       console.log("🌐 Navegando a CFE...");
       const navigationResponse = await page.goto(CFE_URL, {
         waitUntil: "networkidle",
@@ -167,14 +162,12 @@ async function intentarObtenerRecibo(parsed) {
       const statusCode = navigationResponse?.status() ?? 0;
       console.log(`📡 CFE STATUS: ${statusCode}`);
 
-      // 4. Verificar bloqueo de Incapsula
       const html = await page.content();
       if (html.includes("Incapsula") || html.includes("_Incapsula_Resource")) {
         console.log("🚫 IP bloqueada por Incapsula");
         throw new Error("IP bloqueada por Incapsula");
       }
 
-      // 5. Verificar formulario
       const nombreField = page.locator("#MainContent_txtNombre");
       const nombreCount = await nombreField.count();
       console.log(`📝 CAMPO NOMBRE ENCONTRADO: ${nombreCount}`);
@@ -185,7 +178,6 @@ async function intentarObtenerRecibo(parsed) {
 
       await page.waitForTimeout(2000);
 
-      // 6. Llenar formulario
       console.log("📝 Llenando formulario...");
       await safeFill(page, "#MainContent_txtNombre", parsed.nombreCompleto);
       await safeFill(page, "#MainContent_txtRPU", parsed.numeroServicio);
@@ -194,18 +186,15 @@ async function intentarObtenerRecibo(parsed) {
       await safeFill(page, "#MainContent_txtCel", parsed.celular);
       await safeFill(page, "#MainContent_txtCorreoElectronico", parsed.correo);
 
-      // 7. Enviar formulario
       console.log("🔄 Enviando formulario...");
       const continuarBtn = page.locator("#MainContent_btnContinuar");
       await continuarBtn.waitFor({ state: "visible", timeout: 10000 });
       await continuarBtn.click();
 
-      // 8. Esperar resultados
       console.log("⏳ Esperando resultados...");
       await page.waitForSelector("#MainContent_GVHistorial", { timeout: 30000 });
       console.log("✅ Tabla de recibos cargada");
 
-      // 9. Buscar el mes
       const mesBuscado = getMesBuscado();
       console.log(`🔍 Buscando recibo de: ${mesBuscado}`);
 
@@ -226,7 +215,6 @@ async function intentarObtenerRecibo(parsed) {
         filaEncontrada = filas[1] || filas[0];
       }
 
-      // 10. Descargar PDF
       console.log("📄 Descargando PDF...");
       const downloadBtn = filaEncontrada.locator('input[type="image"][title="Descarga Pdf"]');
       await downloadBtn.waitFor({ state: "visible", timeout: 5000 });
@@ -247,7 +235,6 @@ async function intentarObtenerRecibo(parsed) {
       await browser.close();
       console.log(`✅ PDF obtenido correctamente (${pdfBuffer.length} bytes)`);
       
-      // Si llegamos aquí, todo funcionó
       return { success: true, pdfBuffer, numeroServicio: parsed.numeroServicio };
 
     } catch (error) {
@@ -258,20 +245,18 @@ async function intentarObtenerRecibo(parsed) {
         await browser.close().catch(() => {});
       }
       
-      // Si no es el último intento, esperar antes de reintentar
       if (intento < MAX_RETRIES) {
-        console.log(`⏳ Esperando ${RETRY_DELAY/1000} segundos antes del siguiente intento...`);
+        console.log(`⏳ Esperando ${RETRY_DELAY/1000} segundos...`);
         await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
       }
     }
   }
   
-  // Si todos los intentos fallaron
   throw new Error(`Todos los ${MAX_RETRIES} intentos fallaron. Último error: ${lastError?.message || 'Desconocido'}`);
 }
 
 // ============================================================
-// ENDPOINT PRINCIPAL - OBTENER RECIBO
+// ENDPOINT PRINCIPAL
 // ============================================================
 app.post("/obtener-recibo", async (request, response) => {
   const parsed = schema.safeParse(request.body);
@@ -281,12 +266,10 @@ app.post("/obtener-recibo", async (request, response) => {
 
   try {
     console.log("=".repeat(60));
-    console.log("🚀 INICIANDO PROCESO DE OBTENCIÓN DE RECIBO");
+    console.log("🚀 INICIANDO PROCESO CON SMARTPROXY");
     console.log("=".repeat(60));
     console.log(`👤 Usuario: ${parsed.data.nombreCompleto}`);
     console.log(`🔢 Servicio: ${parsed.data.numeroServicio}`);
-    console.log(`📧 Correo: ${parsed.data.correo}`);
-    console.log(`🔄 Reintentos máximos: ${MAX_RETRIES}`);
     console.log("=".repeat(60));
 
     const resultado = await intentarObtenerRecibo(parsed.data);
@@ -315,14 +298,10 @@ app.post("/obtener-recibo", async (request, response) => {
   }
 });
 
-// ============================================================
-// INICIO DEL SERVIDOR
-// ============================================================
 app.listen(PORT, "0.0.0.0", () => {
   console.log("=".repeat(60));
   console.log(`✅ Servidor activo en el puerto ${PORT}`);
-  console.log(`🔑 Proxy: Decodo Residencial (${PROXY_SERVER}:${PROXY_PORT})`);
-  console.log(`🔄 Reintentos máximos: ${MAX_RETRIES}`);
-  console.log(`⏳ Delay entre reintentos: ${RETRY_DELAY/1000}s`);
+  console.log(`🔑 Proxy: SmartProxy (gate.smartproxy.com:10000)`);
+  console.log(`🔄 Reintentos: ${MAX_RETRIES}`);
   console.log("=".repeat(60));
 });
