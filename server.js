@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import { chromium } from "playwright";  // ← PLAYWRIGHT NORMAL
+import { chromium } from "playwright";
 import { z } from "zod";
 import fs from "node:fs/promises";
 
@@ -124,7 +124,7 @@ app.post("/obtener-recibo", async (request, response) => {
     });
 
     const page = await context.newPage();
-    page.setDefaultTimeout(60000);
+    page.setDefaultTimeout(90000); // ← Aumentado a 90 segundos
 
     console.log("🌐 Navegando a CFE...");
     const navigationResponse = await page.goto(CFE_URL, {
@@ -162,9 +162,54 @@ app.post("/obtener-recibo", async (request, response) => {
     await continuarBtn.waitFor({ state: "visible", timeout: 10000 });
     await continuarBtn.click();
 
-    console.log("⏳ Esperando resultados...");
-    await page.waitForSelector("#MainContent_GVHistorial", { timeout: 30000 });
-    console.log("✅ Tabla de recibos cargada");
+    console.log("⏳ Esperando resultados... (puede tomar hasta 60 segundos)");
+
+    // Esperar a que cargue la tabla con 60 segundos
+    try {
+      await page.waitForSelector("#MainContent_GVHistorial", { 
+        state: "visible", 
+        timeout: 60000 
+      });
+      console.log("✅ Tabla de recibos cargada");
+      
+      // Scroll para asegurar que todo cargue
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+      await page.waitForTimeout(1000);
+      
+    } catch (error) {
+      // Si no hay tabla, buscar mensaje de error
+      const errorMessage = await page.locator([
+        ".validation-summary-errors",
+        ".field-validation-error",
+        "[id*='lblMensaje']",
+        "[class*='error']",
+        "[class*='alert']"
+      ].join(",")).textContent().catch(() => null);
+      
+      if (errorMessage && errorMessage.trim()) {
+        console.log(`❌ CFE mostró error: ${errorMessage.trim()}`);
+        throw new Error(`CFE dice: ${errorMessage.trim()}`);
+      }
+      
+      // Verificar si la página tiene algún contenido
+      const bodyText = await page.textContent("body");
+      if (bodyText && bodyText.includes("No se encontraron")) {
+        throw new Error("No se encontraron recibos para los datos proporcionados.");
+      }
+      
+      // Verificar si hay un CAPTCHA
+      const hasCaptcha = await page.locator([
+        "iframe[src*='captcha']",
+        "iframe[src*='recaptcha']",
+        ".g-recaptcha"
+      ].join(",")).count();
+      
+      if (hasCaptcha > 0) {
+        throw new Error("CFE solicitó verificación humana (CAPTCHA). No se puede automatizar.");
+      }
+      
+      throw new Error("No se pudo cargar la tabla de resultados. Verifica los datos.");
+    }
 
     const mesBuscado = getMesBuscado();
     console.log(`🔍 Buscando recibo de: ${mesBuscado}`);
@@ -212,11 +257,11 @@ app.post("/obtener-recibo", async (request, response) => {
     return response.status(200).send(pdfBuffer);
 
   } catch (error) {
-    console.error("❌ Error:", error);
+    console.error("❌ Error:", error.message);
     if (browser) await browser.close().catch(() => {});
     if (!response.headersSent) {
       return response.status(500).json({
-        error: "No fue posible obtener el recibo. Verifica los datos.",
+        error: error.message || "No fue posible obtener el recibo. Verifica los datos.",
       });
     }
   }
