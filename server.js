@@ -17,8 +17,8 @@ const CFE_URL = "https://app.cfe.mx/Aplicaciones/CCFE/ReciboDeLuzGMX/Consulta";
 // ============================================================
 const PROXY_CONFIG = {
   server: 'http://gate.smartproxy.com:10000',
-  username: 'TU_USUARIO_AQUI',        // ← CAMBIA ESTO
-  password: 'TU_CONTRASEÑA_AQUI'      // ← CAMBIA ESTO
+  username: 'spp9625kp7',        // ← CAMBIA ESTO
+  password: 'Hs0m5nla79S+PzxIbc'      // ← CAMBIA ESTO
 };
 
 app.use(
