@@ -18,7 +18,7 @@ const CFE_URL = "https://app.cfe.mx/Aplicaciones/CCFE/ReciboDeLuzGMX/Consulta";
 const PROXY_CONFIG = {
   server: 'http://gate.decodo.com:10001',
   username: 'spp9625kp7',
-  password: 'H$0m5nla79S...'  // ← Verifica que sea la contraseña exacta
+  password: 'w3rn85=sdkit1JSjIP'  // ← Verifica que sea la contraseña exacta
 };
 
 app.use(
