@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 3000;
 const CFE_URL = "https://app.cfe.mx/Aplicaciones/CCFE/ReciboDeLuzGMX/Consulta";
 
 // ============================================================
-// CONFIGURACIÓN - DECODO (PRUEBA CON DIFERENTES PUERTOS)
+// CONFIGURACIÓN - DECODO
 // ============================================================
 const PROXY_PORTS = [10001, 10002, 10003, 10004];
 let currentPortIndex = 0;
@@ -20,7 +20,7 @@ function getProxyConfig() {
   return {
     server: `http://gate.decodo.com:${port}`,
     username: 'spp9625kp7',
-    password: 'w3rn85=sdkit1JSjIP'  // ← Verifica tu contraseña exacta
+    password: 'w3rn85=sdkit1JSjIP'  // ← Cambia por tu contraseña real
   };
 }
 
@@ -49,7 +49,7 @@ app.get("/", (req, res) => res.json({ ok: true, servicio: "Backend de recibos ac
 app.get("/health", (req, res) => res.json({ ok: true }));
 
 // ============================================================
-// TEST DE PROXY CON ROTACIÓN
+// TEST DE PROXY
 // ============================================================
 app.get("/proxy-test", async (req, res) => {
   let browser;
@@ -81,7 +81,33 @@ app.get("/proxy-test", async (req, res) => {
 });
 
 // ============================================================
-// ENDPOINT PRINCIPAL - OBTENER RECIBO
+// FUNCIÓN PARA LLENAR CAMPOS CON SEGURIDAD
+// ============================================================
+async function safeFill(page, selector, value, timeout = 10000) {
+  try {
+    // Esperar a que el campo exista y sea visible
+    await page.waitForSelector(selector, { state: 'visible', timeout });
+    
+    // Verificar que el campo está habilitado
+    const isDisabled = await page.locator(selector).getAttribute('disabled');
+    if (isDisabled) {
+      console.log(`⚠️ Campo ${selector} está deshabilitado, omitiendo`);
+      return false;
+    }
+    
+    // Limpiar y llenar
+    await page.locator(selector).clear();
+    await page.locator(selector).fill(value);
+    console.log(`✅ Llenado: ${selector}`);
+    return true;
+  } catch (error) {
+    console.log(`⚠️ No se pudo llenar ${selector}: ${error.message}`);
+    return false;
+  }
+}
+
+// ============================================================
+// ENDPOINT PRINCIPAL
 // ============================================================
 app.post("/obtener-recibo", async (request, response) => {
   const parsed = schema.safeParse(request.body);
@@ -93,7 +119,6 @@ app.post("/obtener-recibo", async (request, response) => {
   let proxyConfig;
 
   try {
-    // Intentar con varios puertos hasta que uno funcione
     const maxAttempts = PROXY_PORTS.length;
     let lastError = null;
 
@@ -123,44 +148,55 @@ app.post("/obtener-recibo", async (request, response) => {
         const page = await context.newPage();
         page.setDefaultTimeout(60000);
 
-        // Navegar a CFE
+        // ============================================================
+        // 1. IR A CFE
+        // ============================================================
+        console.log("🌐 Navegando a CFE...");
         const navigationResponse = await page.goto(CFE_URL, {
-          waitUntil: "domcontentloaded",
+          waitUntil: "networkidle",  // ← Cambiado a networkidle
           timeout: 60000,
         });
 
         const statusCode = navigationResponse?.status() ?? 0;
-        const finalUrl = page.url();
-        const pageTitle = await page.title();
-
         console.log(`CFE STATUS: ${statusCode}`);
-        console.log(`CFE URL FINAL: ${finalUrl}`);
-        console.log(`CFE TITLE: ${pageTitle}`);
 
         if (statusCode >= 400) {
-          throw new Error(`CFE respondió con estado ${statusCode}. URL: ${finalUrl}`);
+          throw new Error(`CFE respondió con estado ${statusCode}`);
         }
 
+        const pageTitle = await page.title();
+        console.log(`CFE TITLE: ${pageTitle}`);
+
+        // ============================================================
+        // 2. VERIFICAR QUE EL FORMULARIO EXISTA
+        // ============================================================
         const nombreField = page.locator("#MainContent_txtNombre");
         const nombreCount = await nombreField.count();
         console.log(`CAMPO NOMBRE ENCONTRADO: ${nombreCount}`);
 
         if (nombreCount === 0) {
-          throw new Error(`El formulario de CFE no apareció. Título: ${pageTitle}. URL: ${finalUrl}`);
+          throw new Error("El formulario de CFE no apareció.");
         }
 
-        // Esperar y llenar
-        await page.waitForTimeout(1000 + Math.random() * 2000);
-        await nombreField.waitFor({ state: "visible", timeout: 30000 });
-        await nombreField.fill(parsed.data.nombreCompleto);
+        // Esperar un momento para que la página se estabilice
+        await page.waitForTimeout(2000);
 
-        await page.locator("#MainContent_txtRPU").fill(parsed.data.numeroServicio);
-        await page.locator("#MainContent_tbLada").fill(parsed.data.lada);
-        await page.locator("#MainContent_txtTel").fill(parsed.data.telefonoFijo);
-        await page.locator("#MainContent_txtCel").fill(parsed.data.celular);
-        await page.locator("#MainContent_txtCorreoElectronico").fill(parsed.data.correo);
+        // ============================================================
+        // 3. LLENAR FORMULARIO
+        // ============================================================
+        console.log("📝 Llenando formulario...");
 
-        // Detectar captcha
+        // Intentar llenar cada campo
+        await safeFill(page, "#MainContent_txtNombre", parsed.data.nombreCompleto);
+        await safeFill(page, "#MainContent_txtRPU", parsed.data.numeroServicio);
+        await safeFill(page, "#MainContent_tbLada", parsed.data.lada);
+        await safeFill(page, "#MainContent_txtTel", parsed.data.telefonoFijo);
+        await safeFill(page, "#MainContent_txtCel", parsed.data.celular);
+        await safeFill(page, "#MainContent_txtCorreoElectronico", parsed.data.correo);
+
+        // ============================================================
+        // 4. DETECTAR CAPTCHA
+        // ============================================================
         const captchaCount = await page.locator([
           "iframe[src*='captcha']", "iframe[src*='recaptcha']", ".g-recaptcha",
           "[id*='captcha' i]", "[class*='captcha' i]"
@@ -170,17 +206,54 @@ app.post("/obtener-recibo", async (request, response) => {
           return response.status(409).json({ error: "Verificación humana solicitada." });
         }
 
-        // Enviar formulario
+        // ============================================================
+        // 5. ENVIAR FORMULARIO
+        // ============================================================
+        console.log("🔄 Enviando formulario...");
+        
         await Promise.all([
-          page.waitForLoadState("domcontentloaded").catch(() => null),
+          page.waitForLoadState("networkidle").catch(() => null),
           page.locator("#MainContent_btnContinuar").click(),
         ]);
 
-        // Esperar resultados
+        // ============================================================
+        // 6. ESPERAR RESULTADOS
+        // ============================================================
+        console.log("⏳ Esperando resultados...");
+        
         const pdfSelector = 'input[id^="MainContent_GVHistorial_DescargaPDF_"]';
-        await page.locator(pdfSelector).first().waitFor({ state: "visible", timeout: 60000 });
+        
+        try {
+          await page.locator(pdfSelector).first().waitFor({ 
+            state: "visible", 
+            timeout: 60000 
+          });
+          console.log("✅ Resultados cargados");
+        } catch (error) {
+          console.log("❌ No se encontraron resultados");
+          
+          // Verificar si hay mensaje de error
+          const errorMessage = await page.locator([
+            ".validation-summary-errors",
+            ".field-validation-error",
+            "[id*='lblMensaje']",
+            "[class*='error']"
+          ].join(",")).textContent().catch(() => null);
+          
+          if (errorMessage && errorMessage.trim()) {
+            return response.status(404).json({ 
+              error: errorMessage.trim() 
+            });
+          }
+          
+          throw new Error("No se encontraron recibos para los datos proporcionados.");
+        }
 
-        // Descargar PDF
+        // ============================================================
+        // 7. DESCARGAR PDF
+        // ============================================================
+        console.log("📄 Descargando PDF...");
+        
         const downloadPromise = page.waitForEvent("download", { timeout: 60000 });
         await page.locator(pdfSelector).first().click();
         const download = await downloadPromise;
@@ -189,12 +262,14 @@ app.post("/obtener-recibo", async (request, response) => {
         if (!downloadPath) throw new Error("No se generó el archivo.");
 
         const pdfBuffer = await fs.readFile(downloadPath);
+        
+        // Verificar que es PDF válido
         if (pdfBuffer.length < 4 || pdfBuffer.subarray(0, 4).toString() !== "%PDF") {
           throw new Error("El archivo no es un PDF válido.");
         }
 
         await browser.close();
-        console.log("✅ PDF obtenido correctamente");
+        console.log(`✅ PDF obtenido correctamente (${pdfBuffer.length} bytes)`);
 
         // Devolver PDF
         response.setHeader("Content-Type", "application/pdf");
@@ -209,12 +284,10 @@ app.post("/obtener-recibo", async (request, response) => {
           await browser.close().catch(() => {});
           browser = null;
         }
-        // Continuar con el siguiente puerto
         continue;
       }
     }
 
-    // Si llegamos aquí, todos los puertos fallaron
     throw new Error(`Todos los proxies fallaron. Último error: ${lastError?.message || 'Desconocido'}`);
 
   } catch (error) {
