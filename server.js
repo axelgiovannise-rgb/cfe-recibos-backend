@@ -122,22 +122,57 @@ app.post(
 
       page.setDefaultTimeout(60000);
 
-      await page.goto(CFE_URL, {
-        waitUntil: "domcontentloaded",
-        timeout: 60000,
-      });
+      const navigationResponse = await page.goto(CFE_URL, {
+  waitUntil: "domcontentloaded",
+  timeout: 60000,
+});
 
-      await page
-        .locator("#MainContent_txtNombre")
-        .waitFor({
-          state: "visible",
-        });
+const finalUrl = page.url();
+const pageTitle = await page.title();
+const statusCode = navigationResponse?.status() ?? 0;
+const html = await page.content();
 
-      await page
-        .locator("#MainContent_txtNombre")
-        .fill(
-          parsed.data.nombreCompleto,
-        );
+console.log("CFE STATUS:", statusCode);
+console.log("CFE URL FINAL:", finalUrl);
+console.log("CFE TITLE:", pageTitle);
+console.log(
+  "CFE HTML INICIO:",
+  html
+    .slice(0, 3000)
+    .replace(/\s+/g, " "),
+);
+
+const nombreField = page.locator(
+  "#MainContent_txtNombre",
+);
+
+const nombreCount =
+  await nombreField.count();
+
+console.log(
+  "CAMPO NOMBRE ENCONTRADO:",
+  nombreCount,
+);
+
+if (statusCode >= 400) {
+  throw new Error(
+    `CFE respondió con estado ${statusCode}. URL: ${finalUrl}`,
+  );
+}
+
+if (nombreCount === 0) {
+  throw new Error(
+    `El formulario de CFE no apareció. Título: ${pageTitle}. URL: ${finalUrl}`,
+  );
+}
+
+await nombreField.waitFor({
+  state: "visible",
+  timeout: 30000,
+});
+     await nombreField.fill(
+  parsed.data.nombreCompleto,
+);
 
       await page
         .locator("#MainContent_txtRPU")
