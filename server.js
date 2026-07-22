@@ -14,7 +14,7 @@ const CFE_URL = "https://app.cfe.mx/Aplicaciones/CCFE/ReciboDeLuzGMX/Consulta";
 const PROXY_CONFIG = {
   server: 'http://gate.decodo.com:10002',
   username: 'spp9625kp7',
-  password: 'H$0m5nla79S...'  // ← CAMBIA por tu contraseña real
+  password: 'H$0m5nla79S...'
 };
 
 // ============================================================
@@ -41,30 +41,16 @@ const schema = z.object({
 app.get("/", (req, res) => res.json({ ok: true, servicio: "Backend de recibos activo" }));
 app.get("/health", (req, res) => res.json({ ok: true }));
 
-// ============================================================
-// TEST DE PROXY
-// ============================================================
 app.get("/proxy-test", async (req, res) => {
   let browser;
   try {
     console.log("🔄 Probando proxy...");
-    
-    browser = await chromium.launch({
-      headless: true,
-      proxy: PROXY_CONFIG,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"]
-    });
-    
+    browser = await chromium.launch({ headless: true, proxy: PROXY_CONFIG, args: ["--no-sandbox"] });
     const page = await browser.newPage();
     await page.goto('https://api.ipify.org?format=json');
     const content = await page.textContent('body');
     await browser.close();
-    
-    res.json({
-      ok: true,
-      ip: JSON.parse(content).ip,
-      mensaje: "✅ Proxy funcionando"
-    });
+    res.json({ ok: true, ip: JSON.parse(content).ip, mensaje: "✅ Proxy funcionando" });
   } catch (error) {
     if (browser) await browser.close().catch(() => {});
     res.json({ ok: false, error: error.message });
@@ -88,18 +74,29 @@ async function safeFill(page, selector, value, timeout = 10000) {
 }
 
 // ============================================================
-// FUNCIÓN PARA OBTENER EL MES/AÑO DEL RECIBO
+// LÓGICA DEL BIMESTRE (CADA 2 MESES)
 // ============================================================
 function getMesBuscado() {
-  // CFE muestra el recibo del mes anterior al actual
   const fecha = new Date();
-  fecha.setMonth(fecha.getMonth() - 1);
-  
-  const meses = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
-  const mes = meses[fecha.getMonth()];
+  const mes = fecha.getMonth(); // 0=ene, 1=feb, ...
   const anio = fecha.getFullYear();
   
-  return `${mes} ${anio}`;
+  // Si el mes es impar (0,2,4,6,8,10), mostramos el mes anterior (par)
+  // Si el mes es par (1,3,5,7,9,11), mostramos el mes actual (par)
+  let mesBimestre;
+  if (mes % 2 === 0) {
+    // Mes impar (ene, mar, may, jul, sep, nov) → mostrar mes anterior (par)
+    mesBimestre = mes - 1;
+  } else {
+    // Mes par (feb, abr, jun, ago, oct, dic) → mostrar mes actual
+    mesBimestre = mes;
+  }
+  
+  const meses = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+  const mesTexto = meses[mesBimestre];
+  const anioTexto = (mesBimestre < 0) ? anio - 1 : anio;
+  
+  return `${mesTexto} ${anioTexto}`;
 }
 
 // ============================================================
@@ -119,12 +116,7 @@ app.post("/obtener-recibo", async (request, response) => {
     browser = await chromium.launch({
       headless: true,
       proxy: PROXY_CONFIG,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-blink-features=AutomationControlled"
-      ],
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"],
     });
 
     const context = await browser.newContext({
@@ -137,15 +129,9 @@ app.post("/obtener-recibo", async (request, response) => {
     const page = await context.newPage();
     page.setDefaultTimeout(60000);
 
-    // ============================================================
     // 1. IR A CFE
-    // ============================================================
     console.log("🌐 Navegando a CFE...");
-    const navigationResponse = await page.goto(CFE_URL, {
-      waitUntil: "networkidle",
-      timeout: 60000,
-    });
-
+    const navigationResponse = await page.goto(CFE_URL, { waitUntil: "networkidle", timeout: 60000 });
     const statusCode = navigationResponse?.status() ?? 0;
     console.log(`CFE STATUS: ${statusCode}`);
 
@@ -156,9 +142,7 @@ app.post("/obtener-recibo", async (request, response) => {
     const pageTitle = await page.title();
     console.log(`CFE TITLE: ${pageTitle}`);
 
-    // ============================================================
     // 2. VERIFICAR FORMULARIO
-    // ============================================================
     const nombreField = page.locator("#MainContent_txtNombre");
     const nombreCount = await nombreField.count();
     console.log(`CAMPO NOMBRE ENCONTRADO: ${nombreCount}`);
@@ -169,9 +153,7 @@ app.post("/obtener-recibo", async (request, response) => {
 
     await page.waitForTimeout(2000);
 
-    // ============================================================
     // 3. LLENAR FORMULARIO
-    // ============================================================
     console.log("📝 Llenando formulario...");
 
     await safeFill(page, "#MainContent_txtNombre", parsed.data.nombreCompleto);
@@ -181,31 +163,25 @@ app.post("/obtener-recibo", async (request, response) => {
     await safeFill(page, "#MainContent_txtCel", parsed.data.celular);
     await safeFill(page, "#MainContent_txtCorreoElectronico", parsed.data.correo);
 
-    // ============================================================
     // 4. ENVIAR FORMULARIO
-    // ============================================================
     console.log("🔄 Enviando formulario...");
-    
     const continuarBtn = page.locator('#MainContent_btnContinuar');
     await continuarBtn.waitFor({ state: "visible", timeout: 10000 });
     await continuarBtn.click();
 
-    // ============================================================
-    // 5. ESPERAR RESULTADOS Y BUSCAR MES
-    // ============================================================
+    // 5. ESPERAR RESULTADOS
     console.log("⏳ Esperando resultados...");
-    
     await page.waitForSelector('#MainContent_GVHistorial', { timeout: 30000 });
     console.log("✅ Tabla de recibos cargada");
 
-    // Obtener el mes que buscamos (ej: "jun 2026")
+    // Obtener el mes del bimestre actual
     const mesBuscado = getMesBuscado();
     console.log(`🔍 Buscando recibo de: ${mesBuscado}`);
 
     // Buscar la fila con ese mes
     const filas = await page.locator('#MainContent_GVHistorial tr').all();
-    
     let filaEncontrada = null;
+
     for (let i = 0; i < filas.length; i++) {
       const texto = await filas[i].textContent();
       if (texto && texto.includes(mesBuscado)) {
@@ -216,19 +192,15 @@ app.post("/obtener-recibo", async (request, response) => {
     }
 
     if (!filaEncontrada) {
-      // Si no encuentra el mes, intentar con el primer recibo visible
-      console.log(`⚠️ No se encontró ${mesBuscado}, tomando el primer recibo`);
+      console.log(`⚠️ No se encontró ${mesBuscado}, tomando el primer recibo visible`);
       filaEncontrada = filas[1]; // Saltar header
     }
 
-    // ============================================================
     // 6. DESCARGAR PDF
-    // ============================================================
     console.log("📄 Descargando PDF...");
-    
     const downloadBtn = filaEncontrada.locator('input[type="image"][title="Descarga Pdf"]');
     await downloadBtn.waitFor({ state: "visible", timeout: 5000 });
-    
+
     const downloadPromise = page.waitForEvent("download", { timeout: 60000 });
     await downloadBtn.click();
     const download = await downloadPromise;
@@ -237,7 +209,7 @@ app.post("/obtener-recibo", async (request, response) => {
     if (!downloadPath) throw new Error("No se generó el archivo.");
 
     const pdfBuffer = await fs.readFile(downloadPath);
-    
+
     if (pdfBuffer.length < 4 || pdfBuffer.subarray(0, 4).toString() !== "%PDF") {
       throw new Error("El archivo no es un PDF válido.");
     }
@@ -261,9 +233,6 @@ app.post("/obtener-recibo", async (request, response) => {
   }
 });
 
-// ============================================================
-// INICIO
-// ============================================================
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Servidor activo en el puerto ${PORT}`);
 });
