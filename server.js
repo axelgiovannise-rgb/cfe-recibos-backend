@@ -9,10 +9,10 @@ const PORT = process.env.PORT || 3000;
 const CFE_URL = "https://app.cfe.mx/Aplicaciones/CCFE/ReciboDeLuzGMX/Consulta";
 
 // ============================================================
-// CONFIGURACIÓN - SMARTPROXY (3GB)
+// CONFIGURACIÓN - SMARTPROXY (3GB) - ¡PON TUS CREDENCIALES!
 // ============================================================
-const PROXY_USERNAME = "spp9625kp7";  // ← CAMBIA ESTO
-const PROXY_PASSWORD = "w3rn85=sdkit1JSjIP";  // ← CAMBIA ESTO
+const PROXY_USERNAME = "spp9625kp7";        // ← CAMBIA ESTO
+const PROXY_PASSWORD = "w3rn85=sdkit1JSjIP";     // ← CAMBIA ESTO
 const PROXY_SERVER = "gate.smartproxy.com";
 const PROXY_PORT = 10000;
 
@@ -301,7 +301,7 @@ app.post("/obtener-recibo", async (request, response) => {
 app.listen(PORT, "0.0.0.0", () => {
   console.log("=".repeat(60));
   console.log(`✅ Servidor activo en el puerto ${PORT}`);
-  console.log(`🔑 Proxy: SmartProxy (gate.smartproxy.com:10000)`);
+  console.log(`🔑 Proxy: SmartProxy (${PROXY_SERVER}:${PROXY_PORT})`);
   console.log(`🔄 Reintentos: ${MAX_RETRIES}`);
   console.log("=".repeat(60));
 });
