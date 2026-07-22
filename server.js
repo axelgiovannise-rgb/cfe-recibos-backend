@@ -13,12 +13,12 @@ const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "*";
 const CFE_URL = "https://app.cfe.mx/Aplicaciones/CCFE/ReciboDeLuzGMX/Consulta";
 
 // ============================================================
-// CONFIGURACIÓN - SMARTPROXY
+// CONFIGURACIÓN - DECODO (PROXY RESIDENCIAL)
 // ============================================================
 const PROXY_CONFIG = {
-  server: 'http://gate.smartproxy.com:10000',
-  username: 'spp9625kp7',        // ← CAMBIA ESTO
-  password: 'Hs0m5nla79S+PzxIbc'      // ← CAMBIA ESTO
+  server: 'http://gate.decodo.com:10001',
+  username: 'spp9625kp7',
+  password: 'H$0m5nla79S...'  // ← Verifica que sea la contraseña exacta
 };
 
 app.use(
@@ -56,6 +56,44 @@ app.get("/health", (_request, response) => {
   });
 });
 
+// ============================================================
+// ENDPOINT DE PRUEBA DEL PROXY
+// ============================================================
+app.get("/proxy-test", async (req, res) => {
+  let browser;
+  try {
+    console.log("🔄 Probando proxy Decodo...");
+    
+    browser = await chromium.launch({
+      headless: true,
+      proxy: PROXY_CONFIG,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"]
+    });
+    
+    const page = await browser.newPage();
+    await page.goto('https://api.ipify.org?format=json');
+    const content = await page.textContent('body');
+    await browser.close();
+    
+    const ip = JSON.parse(content).ip;
+    console.log("✅ Proxy funciona. IP:", ip);
+    
+    res.json({
+      ok: true,
+      ip: ip,
+      mensaje: "✅ Proxy Decodo funcionando correctamente"
+    });
+  } catch (error) {
+    console.error("❌ Error en proxy-test:", error.message);
+    if (browser) await browser.close().catch(() => {});
+    res.json({
+      ok: false,
+      error: error.message,
+      mensaje: "❌ Proxy NO funciona. Revisa credenciales."
+    });
+  }
+});
+
 app.post("/obtener-recibo", async (request, response) => {
   const parsed = schema.safeParse(request.body);
 
@@ -68,6 +106,8 @@ app.post("/obtener-recibo", async (request, response) => {
   let browser;
 
   try {
+    console.log("🔄 Abriendo navegador con proxy Decodo...");
+    
     browser = await chromium.launch({
       headless: true,
       proxy: PROXY_CONFIG,
@@ -100,7 +140,6 @@ app.post("/obtener-recibo", async (request, response) => {
     console.log("CFE STATUS:", statusCode);
     console.log("CFE URL FINAL:", finalUrl);
     console.log("CFE TITLE:", pageTitle);
-    console.log("CFE HTML INICIO:", html.slice(0, 3000).replace(/\s+/g, " "));
 
     const nombreField = page.locator("#MainContent_txtNombre");
     const nombreCount = await nombreField.count();
