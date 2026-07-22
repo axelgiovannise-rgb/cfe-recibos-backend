@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 3000;
 const CFE_URL = "https://app.cfe.mx/Aplicaciones/CCFE/ReciboDeLuzGMX/Consulta";
 
 // ============================================================
-// CONFIGURACIÓN - DECODO
+// CONFIGURACIÓN - DECODO (PROXY FUNCIONANDO)
 // ============================================================
 const PROXY_CONFIG = {
   server: 'http://mx.decodo.com:20001',
@@ -20,15 +20,21 @@ const PROXY_CONFIG = {
 app.use(cors({ origin: true, methods: ["GET", "POST", "OPTIONS"], allowedHeaders: ["Content-Type"] }));
 app.use(express.json({ limit: "20kb" }));
 
+// ============================================================
+// ESQUEMA DE VALIDACIÓN - SOLO CAMPOS OBLIGATORIOS
+// ============================================================
 const schema = z.object({
   nombreCompleto: z.string().trim().min(3).max(120),
   numeroServicio: z.string().trim().min(1).max(24).regex(/^\d+$/),
-  lada: z.string().trim().min(2).max(5).regex(/^\d+$/),
-  telefonoFijo: z.string().trim().min(1).max(20).regex(/^\d+$/),
-  celular: z.string().trim().min(1).max(20).regex(/^\d+$/),
-  correo: z.string().trim().email().max(255),
+  lada: z.string().trim().min(2).max(5).regex(/^\d+$/).default("55"),
+  telefonoFijo: z.string().trim().min(1).max(20).regex(/^\d+$/).default("55555555"),
+  celular: z.string().trim().min(1).max(20).regex(/^\d+$/).default("5555555555"),
+  correo: z.string().trim().email().max(255).default("test@test.com"),
 });
 
+// ============================================================
+// ENDPOINTS
+// ============================================================
 app.get("/", (req, res) => res.json({ ok: true, servicio: "Backend de recibos activo" }));
 app.get("/health", (req, res) => res.json({ ok: true }));
 
@@ -38,22 +44,13 @@ app.get("/proxy-test", async (req, res) => {
     browser = await chromium.launch({
       headless: true,
       proxy: PROXY_CONFIG,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-blink-features=AutomationControlled",
-      ],
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-blink-features=AutomationControlled"],
     });
     const page = await browser.newPage();
     await page.goto("https://api.ipify.org?format=json", { timeout: 30000 });
     const content = await page.textContent("body");
     await browser.close();
-    res.json({
-      ok: true,
-      ip: JSON.parse(content).ip,
-      proxy: PROXY_CONFIG.server,
-      mensaje: "✅ Proxy funcionando",
-    });
+    res.json({ ok: true, ip: JSON.parse(content).ip, mensaje: "✅ Proxy funcionando" });
   } catch (error) {
     if (browser) await browser.close().catch(() => {});
     res.json({ ok: false, error: error.message });
@@ -73,36 +70,27 @@ async function safeFill(page, selector, value, timeout = 10000) {
   }
 }
 
-function getMesBuscado() {
-  const fecha = new Date();
-  const mes = fecha.getMonth();
-  const anio = fecha.getFullYear();
-  let mesBimestre;
-  if (mes % 2 === 0) {
-    mesBimestre = mes - 1;
-  } else {
-    mesBimestre = mes;
-  }
-  const meses = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
-  const mesTexto = meses[mesBimestre] || "ene";
-  const anioTexto = mesBimestre < 0 ? anio - 1 : anio;
-  return `${mesTexto} ${anioTexto}`;
-}
-
+// ============================================================
+// ENDPOINT PRINCIPAL - OBTENER RECIBO
+// ============================================================
 app.post("/obtener-recibo", async (request, response) => {
   const parsed = schema.safeParse(request.body);
   if (!parsed.success) {
-    return response.status(400).json({ error: "Datos inválidos." });
+    return response.status(400).json({ 
+      error: "Datos inválidos. Nombre y número de servicio son obligatorios.",
+      detalles: parsed.error.issues
+    });
   }
 
   let browser;
 
   try {
     console.log("=".repeat(60));
-    console.log("🚀 OBTENIENDO RECIBO");
+    console.log("🚀 OBTENIENDO RECIBO CFE");
     console.log("=".repeat(60));
-    console.log(`👤 Usuario: ${parsed.data.nombreCompleto}`);
+    console.log(`👤 Nombre: ${parsed.data.nombreCompleto}`);
     console.log(`🔢 Servicio: ${parsed.data.numeroServicio}`);
+    console.log(`📧 Correo: ${parsed.data.correo}`);
     console.log("=".repeat(60));
 
     browser = await chromium.launch({
@@ -124,7 +112,7 @@ app.post("/obtener-recibo", async (request, response) => {
     });
 
     const page = await context.newPage();
-    page.setDefaultTimeout(90000); // ← Aumentado a 90 segundos
+    page.setDefaultTimeout(90000);
 
     console.log("🌐 Navegando a CFE...");
     const navigationResponse = await page.goto(CFE_URL, {
@@ -162,99 +150,56 @@ app.post("/obtener-recibo", async (request, response) => {
     await continuarBtn.waitFor({ state: "visible", timeout: 10000 });
     await continuarBtn.click();
 
-    console.log("⏳ Esperando resultados... (puede tomar hasta 60 segundos)");
+    console.log("⏳ Esperando resultados... (hasta 60 segundos)");
 
-    // Esperar a que cargue la tabla con 60 segundos
+    // Esperar el botón de descarga
+    const pdfSelector = '#MainContent_GVHistorial_DescargaPDF_0';
+    
     try {
-      await page.waitForSelector("#MainContent_GVHistorial", { 
-        state: "visible", 
+      await page.waitForSelector(pdfSelector, { 
+        state: 'visible', 
         timeout: 60000 
       });
-      console.log("✅ Tabla de recibos cargada");
+      console.log('✅ Botón de descarga encontrado');
       
-      // Scroll para asegurar que todo cargue
-      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-      await page.waitForTimeout(1000);
+      console.log("📄 Descargando PDF...");
+      const downloadPromise = page.waitForEvent('download', { timeout: 60000 });
+      await page.click(pdfSelector);
+      
+      const download = await downloadPromise;
+      const downloadPath = await download.path();
+
+      if (!downloadPath) throw new Error("No se generó el archivo.");
+
+      const pdfBuffer = await fs.readFile(downloadPath);
+
+      if (pdfBuffer.length < 4 || pdfBuffer.subarray(0, 4).toString() !== "%PDF") {
+        throw new Error("El archivo no es un PDF válido.");
+      }
+
+      await browser.close();
+      console.log(`✅ PDF obtenido correctamente (${pdfBuffer.length} bytes)`);
+
+      response.setHeader("Content-Type", "application/pdf");
+      response.setHeader("Content-Disposition", `attachment; filename="recibo-${parsed.data.numeroServicio}.pdf"`);
+      response.setHeader("Cache-Control", "no-store, max-age=0");
+      return response.status(200).send(pdfBuffer);
       
     } catch (error) {
-      // Si no hay tabla, buscar mensaje de error
+      // Si no hay botón, buscar mensaje de error
       const errorMessage = await page.locator([
         ".validation-summary-errors",
         ".field-validation-error",
         "[id*='lblMensaje']",
-        "[class*='error']",
-        "[class*='alert']"
+        "[class*='error']"
       ].join(",")).textContent().catch(() => null);
       
       if (errorMessage && errorMessage.trim()) {
-        console.log(`❌ CFE mostró error: ${errorMessage.trim()}`);
         throw new Error(`CFE dice: ${errorMessage.trim()}`);
       }
       
-      // Verificar si la página tiene algún contenido
-      const bodyText = await page.textContent("body");
-      if (bodyText && bodyText.includes("No se encontraron")) {
-        throw new Error("No se encontraron recibos para los datos proporcionados.");
-      }
-      
-      // Verificar si hay un CAPTCHA
-      const hasCaptcha = await page.locator([
-        "iframe[src*='captcha']",
-        "iframe[src*='recaptcha']",
-        ".g-recaptcha"
-      ].join(",")).count();
-      
-      if (hasCaptcha > 0) {
-        throw new Error("CFE solicitó verificación humana (CAPTCHA). No se puede automatizar.");
-      }
-      
-      throw new Error("No se pudo cargar la tabla de resultados. Verifica los datos.");
+      throw new Error("No se encontró el botón de descarga. Verifica que el nombre y número de servicio sean correctos.");
     }
-
-    const mesBuscado = getMesBuscado();
-    console.log(`🔍 Buscando recibo de: ${mesBuscado}`);
-
-    const filas = await page.locator("#MainContent_GVHistorial tr").all();
-    let filaEncontrada = null;
-
-    for (let i = 0; i < filas.length; i++) {
-      const texto = await filas[i].textContent();
-      if (texto && texto.includes(mesBuscado)) {
-        filaEncontrada = filas[i];
-        console.log(`✅ Encontrado: ${mesBuscado}`);
-        break;
-      }
-    }
-
-    if (!filaEncontrada) {
-      console.log(`⚠️ No se encontró ${mesBuscado}, tomando el primer recibo`);
-      filaEncontrada = filas[1] || filas[0];
-    }
-
-    console.log("📄 Descargando PDF...");
-    const downloadBtn = filaEncontrada.locator('input[type="image"][title="Descarga Pdf"]');
-    await downloadBtn.waitFor({ state: "visible", timeout: 5000 });
-
-    const downloadPromise = page.waitForEvent("download", { timeout: 60000 });
-    await downloadBtn.click();
-    const download = await downloadPromise;
-    const downloadPath = await download.path();
-
-    if (!downloadPath) throw new Error("No se generó el archivo.");
-
-    const pdfBuffer = await fs.readFile(downloadPath);
-
-    if (pdfBuffer.length < 4 || pdfBuffer.subarray(0, 4).toString() !== "%PDF") {
-      throw new Error("El archivo no es un PDF válido.");
-    }
-
-    await browser.close();
-    console.log(`✅ PDF obtenido correctamente (${pdfBuffer.length} bytes)`);
-
-    response.setHeader("Content-Type", "application/pdf");
-    response.setHeader("Content-Disposition", `attachment; filename="recibo-${parsed.data.numeroServicio}.pdf"`);
-    response.setHeader("Cache-Control", "no-store, max-age=0");
-    return response.status(200).send(pdfBuffer);
 
   } catch (error) {
     console.error("❌ Error:", error.message);
