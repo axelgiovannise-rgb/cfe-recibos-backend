@@ -9,12 +9,13 @@ const PORT = process.env.PORT || 3000;
 const CFE_URL = "https://app.cfe.mx/Aplicaciones/CCFE/ReciboDeLuzGMX/Consulta";
 
 // ============================================================
-// CONFIGURACIÓN - DECODO RESIDENCIAL (3GB)
+// CONFIGURACIÓN - DECODO RESIDENCIAL (3GB) - ¡CORREGIDO!
 // ============================================================
 const PROXY_USERNAME = "spp9625kp7";
-const PROXY_PASSWORD = "w3rn85=sdkit1JSjIP";  // ← PON LA CONTRASEÑA EXACTA
+const PROXY_PASSWORD = "w3rn85=sdkit1JSjIP";
 
-const PROXY_PORTS = [20001, 20002, 20003, 20004, 20005, 20006, 20007];
+// Puerto correcto: 20000 en mx.decodo.com
+const PROXY_PORTS = [20000];
 
 // ============================================================
 // MIDDLEWARE
@@ -47,7 +48,7 @@ app.get("/proxy-test", async (req, res) => {
   let browser;
   try {
     const config = {
-      server: `http://gate.decodo.com:20001`,
+      server: 'http://mx.decodo.com:20000',
       username: PROXY_USERNAME,
       password: PROXY_PASSWORD,
     };
@@ -129,7 +130,7 @@ async function encontrarProxyFuncionando() {
 
   for (const puerto of puertosMezclados) {
     const config = {
-      server: `http://gate.decodo.com:${puerto}`,
+      server: `http://mx.decodo.com:${puerto}`,  // ← ¡CAMBIA A mx.decodo.com!
       username: PROXY_USERNAME,
       password: PROXY_PASSWORD,
     };
@@ -353,6 +354,6 @@ app.post("/obtener-recibo", async (request, response) => {
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`✅ Servidor activo en el puerto ${PORT}`);
-  console.log(`🔑 Proxy: Decodo Residencial (3GB) - 7 puertos`);
+  console.log(`🔑 Proxy: Decodo Residencial (3GB) - mx.decodo.com`);
   console.log(`🔄 Modo: Rotación automática`);
 });
