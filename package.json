@@ -1,7 +1,6 @@
 {
   "name": "cfe-recibos-backend",
   "version": "1.0.0",
-  "description": "Backend para obtener recibos CFE",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -11,6 +10,6 @@
     "cors": "^2.8.5",
     "zod": "^3.24.2",
     "playwright": "^1.40.0",
-    "anticaptcha": "^2.0.0"
+    "@antiadmin/anticaptchaofficial": "^1.0.0"
   }
 }
