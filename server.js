@@ -123,7 +123,32 @@ async function resolverCaptcha(page, contexto = "general") {
     
     await page.waitForTimeout(1000);
     
-    const captchaImage = await page.locator('#MainContent_Imagemanual').screenshot({ encoding: "base64" });
+    // ============================================================
+    // CAPTURAR LA IMAGEN DEL CAPTCHA DESDE EL ATRIBUTO SRC
+    // ============================================================
+    const captchaImageSrc = await page.locator('#MainContent_Imagemanual').getAttribute('src');
+    if (!captchaImageSrc || !captchaImageSrc.includes('data:image')) {
+      throw new Error('No se pudo obtener la imagen del CAPTCHA');
+    }
+    
+    const captchaImage = captchaImageSrc.replace('data:image/png;base64,', '');
+    console.log(`📸 Imagen CAPTCHA capturada, tamaño: ${captchaImage.length} bytes`);
+    
+    if (captchaImage.length < 100) {
+      await page.waitForTimeout(2000);
+      const newSrc = await page.locator('#MainContent_Imagemanual').getAttribute('src');
+      if (newSrc && newSrc.includes('data:image')) {
+        const newImage = newSrc.replace('data:image/png;base64,', '');
+        if (newImage.length > 100) {
+          const solution = await resolverCaptchaConAntiCaptcha(newImage);
+          await page.fill('#MainContent_txtCaptcha', solution);
+          await page.click('#MainContent_btnAceptar');
+          await page.waitForSelector('#myModalRevisarNumero', { state: 'hidden', timeout: 10000 });
+          return solution;
+        }
+      }
+      throw new Error('La imagen del CAPTCHA está vacía');
+    }
     
     const solution = await resolverCaptchaConAntiCaptcha(captchaImage);
     
@@ -170,9 +195,6 @@ app.get("/proxy-test", async (req, res) => {
   }
 });
 
-// ============================================================
-// FUNCIÓN PARA LLENAR SOLO CAMPOS VISIBLES
-// ============================================================
 async function safeFill(page, selector, value, timeout = 5000) {
   try {
     const element = page.locator(selector);
@@ -261,9 +283,6 @@ app.post("/obtener-recibo", async (request, response) => {
 
         console.log("📝 Llenando formulario...");
 
-        // ============================================================
-        // LLENAR SOLO CAMPOS VISIBLES
-        // ============================================================
         const nombre = parsed.data.nombreCompleto;
         const rpu = parsed.data.numeroServicio;
         const lada = parsed.data.lada || "55";
