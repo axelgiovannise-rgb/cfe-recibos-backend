@@ -47,9 +47,9 @@ const schema = z.object({
   nombreCompleto: z.string().trim().min(3).max(120),
   numeroServicio: z.string().trim().min(1).max(24).regex(/^\d+$/),
   lada: z.string().trim().min(2).max(5).regex(/^\d+$/).default("55"),
-  telefonoFijo: z.string().trim().min(1).max(20).regex(/^\d+$/).default("55555555"),
-  celular: z.string().trim().min(1).max(20).regex(/^\d+$/).default("5555555555"),
-  correo: z.string().trim().email().max(255).default("test@test.com"),
+  telefonoFijo: z.string().trim().min(1).max(20).regex(/^\d+$/).optional(),
+  celular: z.string().trim().min(1).max(20).regex(/^\d+$/).optional(),
+  correo: z.string().trim().email().max(255).optional(),
 });
 
 // ============================================================
@@ -178,7 +178,9 @@ async function safeFill(page, selector, value, timeout = 10000) {
       console.log(`⚠️ Elemento ${selector} no encontrado, omitiendo...`);
       return false;
     }
-    // Intentar llenar sin verificar visibilidad
+    // Esperar a que el campo sea visible
+    await element.waitFor({ state: "visible", timeout: 5000 });
+    await element.clear();
     await element.fill(value);
     console.log(`✅ Llenado: ${selector}`);
     return true;
@@ -246,21 +248,25 @@ app.post("/obtener-recibo", async (request, response) => {
         console.log("📝 Llenando formulario...");
 
         // ============================================================
-        // LLENAR TODOS LOS CAMPOS
+        // LLENAR CAMPOS OBLIGATORIOS
         // ============================================================
         const nombre = parsed.data.nombreCompleto;
         const rpu = parsed.data.numeroServicio;
         const lada = parsed.data.lada || "55";
         const telefono = parsed.data.telefonoFijo || "55555555";
-        const celular = parsed.data.celular || "5555555555";
         const correo = parsed.data.correo || "test@test.com";
 
+        // Campos obligatorios
         await safeFill(page, "#MainContent_txtNombre", nombre);
         await safeFill(page, "#MainContent_txtRPU", rpu);
         await safeFill(page, "#MainContent_tbLada", lada);
         await safeFill(page, "#MainContent_txtTel", telefono);
-        await safeFill(page, "#MainContent_txtCel", celular);
         await safeFill(page, "#MainContent_txtCorreoElectronico", correo);
+
+        // Teléfono móvil (NO ES OBLIGATORIO, pero si se envía, se llena)
+        if (parsed.data.celular) {
+          await safeFill(page, "#MainContent_txtCel", parsed.data.celular);
+        }
 
         console.log("🔄 Enviando formulario...");
         await page.click("#MainContent_btnContinuar");
@@ -296,6 +302,7 @@ app.post("/obtener-recibo", async (request, response) => {
         }
 
         if (!botonEncontrado) {
+          // Verificar si hay mensaje de error
           const bodyText = await page.textContent("body");
           if (bodyText && bodyText.includes("No se encontraron")) {
             throw new Error("No se encontraron recibos para los datos proporcionados.");
