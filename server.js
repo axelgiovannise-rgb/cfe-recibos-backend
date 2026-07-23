@@ -87,29 +87,23 @@ async function resolverCaptcha(page) {
   try {
     console.log("🔍 Esperando CAPTCHA en modal...");
     
-    // Esperar a que el modal aparezca usando el ID exacto
     await page.waitForSelector('#myModalRevisarNumero', { 
       timeout: 30000 
     });
     console.log("✅ Modal de CAPTCHA encontrado");
     
-    // Esperar un momento para que cargue la imagen
     await page.waitForTimeout(1000);
     
-    // Tomar captura de la imagen del CAPTCHA
     const captchaImage = await page.locator('#MainContent_Imagemanual').screenshot({ encoding: "base64" });
     
     const solution = await resolverCaptchaConAntiCaptcha(captchaImage);
     
-    // Llenar el campo del CAPTCHA
     await page.fill('#MainContent_txtCaptcha', solution);
     console.log(`✅ CAPTCHA llenado con: ${solution}`);
     
-    // Hacer clic en "Aceptar"
     await page.click('#MainContent_btnAceptar');
     console.log("✅ Botón Aceptar presionado");
     
-    // Esperar a que el modal se cierre
     await page.waitForSelector('#myModalRevisarNumero', { state: 'hidden', timeout: 10000 });
     console.log("✅ Modal cerrado");
     
@@ -233,15 +227,13 @@ app.post("/obtener-recibo", async (request, response) => {
     console.log("⏳ Esperando resultados...");
 
     // ============================================================
-    // ESPERA ACTIVA PARA EL MODAL DEL CAPTCHA (HASTA 30 SEGUNDOS)
+    // ESPERA ACTIVA PARA EL MODAL DEL CAPTCHA
     // ============================================================
     let captchaResuelto = false;
     
-    // Intentar detectar el modal durante 30 segundos (15 intentos de 2 segundos)
     for (let i = 0; i < 15; i++) {
       await page.waitForTimeout(2000);
       
-      // Verificar si el modal está visible
       const modalVisible = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
       
       if (modalVisible) {
@@ -252,7 +244,6 @@ app.post("/obtener-recibo", async (request, response) => {
         break;
       }
       
-      // Verificar si ya apareció el botón de descarga
       const hasDownloadBtn = await page.locator('input[title="Descarga Pdf"]').count();
       if (hasDownloadBtn > 0) {
         console.log("✅ Botón de descarga encontrado, no hay CAPTCHA");
@@ -263,42 +254,53 @@ app.post("/obtener-recibo", async (request, response) => {
     }
 
     // ============================================================
-    // ESPERAR EL BOTÓN DE DESCARGA
+    // CAPTURAR EL PDF COMO RESPUESTA HTTP
     // ============================================================
-    try {
-      await page.waitForSelector('input[title="Descarga Pdf"]', { 
-        timeout: 60000 
-      });
-      console.log("✅ Botón de descarga encontrado");
-    } catch (error) {
-      // Verificar si hay otro CAPTCHA
-      const modalVisible2 = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
-      if (modalVisible2 && !captchaResuelto) {
-        console.log("🔍 CAPTCHA en modal detectado, resolviendo...");
-        await resolverCaptcha(page);
-        await page.waitForSelector('input[title="Descarga Pdf"]', { timeout: 30000 });
-        console.log("✅ Botón de descarga encontrado después del CAPTCHA");
-      } else {
-        const bodyText = await page.textContent("body");
-        if (bodyText && bodyText.includes("No se encontraron")) {
-          throw new Error("No se encontraron recibos para los datos proporcionados.");
-        }
-        throw new Error("No se encontró el botón de descarga. Verifica los datos.");
-      }
+    console.log("📄 Capturando PDF...");
+
+    // Interceptar la respuesta del PDF
+    const pdfResponse = await page.waitForResponse(
+      response => {
+        const contentType = response.headers()['content-type'] || '';
+        return contentType.includes('pdf') || contentType.includes('application/pdf');
+      },
+      { timeout: 60000 }
+    );
+
+    // Obtener el PDF como buffer
+    const pdfBuffer = await pdfResponse.body();
+
+    if (!pdfBuffer || pdfBuffer.length < 100) {
+      throw new Error("El PDF está vacío o es demasiado pequeño");
     }
 
-    // ============================================================
-    // DESCARGAR PDF
-    // ============================================================
-    console.log("📄 Descargando PDF...");
-    const downloadPromise = page.waitForEvent('download', { timeout: 60000 });
-    await page.click('input[title="Descarga Pdf"]');
-    const download = await downloadPromise;
-    const pdfPath = await download.path();
-    const pdfBuffer = await fs.readFile(pdfPath);
-    
-    await browser.close();
     console.log(`✅ PDF obtenido (${pdfBuffer.length} bytes)`);
+
+    // Verificar que es un PDF válido
+    if (pdfBuffer.toString('utf8', 0, 4) !== '%PDF') {
+      // Intentar buscar el PDF en la respuesta si no es directo
+      const html = await page.content();
+      const pdfMatch = html.match(/https?:\/\/[^\s"']+\.pdf/);
+      if (pdfMatch) {
+        console.log("🔍 PDF encontrado en HTML, descargando...");
+        const pdfUrl = pdfMatch[0];
+        const pdfFetch = await fetch(pdfUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          }
+        });
+        const pdfBuffer2 = await pdfFetch.arrayBuffer();
+        if (pdfBuffer2 && pdfBuffer2.byteLength > 0) {
+          console.log(`✅ PDF descargado desde URL (${pdfBuffer2.byteLength} bytes)`);
+          response.setHeader("Content-Type", "application/pdf");
+          response.setHeader("Content-Disposition", `attachment; filename="recibo-${parsed.data.numeroServicio}.pdf"`);
+          return response.send(Buffer.from(pdfBuffer2));
+        }
+      }
+      throw new Error("El archivo no es un PDF válido");
+    }
+
+    await browser.close();
     
     response.setHeader("Content-Type", "application/pdf");
     response.setHeader("Content-Disposition", `attachment; filename="recibo-${parsed.data.numeroServicio}.pdf"`);
