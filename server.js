@@ -10,13 +10,25 @@ const PORT = process.env.PORT || 3001;
 const CFE_URL = "https://app.cfe.mx/Aplicaciones/CCFE/ReciboDeLuzGMX/Consulta";
 
 // ============================================================
-// CONFIGURACIÓN - DECODO
+// CONFIGURACIÓN - DECODO (ROTACIÓN DE PUERTOS)
 // ============================================================
-const PROXY_CONFIG = {
-  server: 'http://mx.decodo.com:20001',
-  username: 'spp9625kp7',
-  password: 'w3rn85=sdkit1JSjIP',
-};
+const PROXY_USERNAME = "spp9625kp7";
+const PROXY_PASSWORD = "w3rn85=sdkit1JSjIP";
+const PROXY_SERVER = "gate.decodo.com";
+
+// Puertos rotativos para cambiar de IP
+const PROXY_PORTS = [10001, 10002, 10003, 10004, 10005, 10006, 10007];
+let currentPortIndex = 0;
+
+function getProxyConfig() {
+  const port = PROXY_PORTS[currentPortIndex % PROXY_PORTS.length];
+  currentPortIndex++;
+  return {
+    server: `http://${PROXY_SERVER}:${port}`,
+    username: PROXY_USERNAME,
+    password: PROXY_PASSWORD,
+  };
+}
 
 // ============================================================
 // CONFIGURACIÓN - ANTI-CAPTCHA
@@ -135,9 +147,11 @@ app.get("/health", (req, res) => res.json({ ok: true }));
 app.get("/proxy-test", async (req, res) => {
   let browser;
   try {
+    const config = getProxyConfig();
+    console.log(`🔄 Probando proxy: ${config.server}`);
     browser = await chromium.launch({
       headless: true,
-      proxy: PROXY_CONFIG,
+      proxy: config,
       args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-blink-features=AutomationControlled"],
     });
     const page = await browser.newPage();
@@ -171,6 +185,7 @@ app.post("/obtener-recibo", async (request, response) => {
   }
 
   let browser;
+  let proxyConfig;
 
   try {
     console.log("=".repeat(60));
@@ -180,212 +195,181 @@ app.post("/obtener-recibo", async (request, response) => {
     console.log(`🔢 Servicio: ${parsed.data.numeroServicio}`);
     console.log("=".repeat(60));
 
-    browser = await chromium.launch({
-      headless: true,
-      proxy: PROXY_CONFIG,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-blink-features=AutomationControlled",
-      ],
-    });
-
-    const context = await browser.newContext({
-      acceptDownloads: true,
-      locale: "es-MX",
-      viewport: { width: 1920, height: 1080 },
-      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    });
-
-    const page = await context.newPage();
-    page.setDefaultTimeout(120000);
-
-    console.log("🌐 Navegando a CFE...");
-    await page.goto(CFE_URL, { waitUntil: "networkidle", timeout: 60000 });
-
-    const nombreCount = await page.locator("#MainContent_txtNombre").count();
-    console.log(`📝 CAMPO NOMBRE ENCONTRADO: ${nombreCount}`);
-
-    if (nombreCount === 0) {
-      throw new Error("El formulario de CFE no apareció.");
-    }
-
-    await page.waitForTimeout(2000);
-
-    console.log("📝 Llenando formulario...");
-    await safeFill(page, "#MainContent_txtNombre", parsed.data.nombreCompleto);
-    await safeFill(page, "#MainContent_txtRPU", parsed.data.numeroServicio);
-    await safeFill(page, "#MainContent_tbLada", parsed.data.lada);
-    await safeFill(page, "#MainContent_txtTel", parsed.data.telefonoFijo);
-    await safeFill(page, "#MainContent_txtCel", parsed.data.celular);
-    await safeFill(page, "#MainContent_txtCorreoElectronico", parsed.data.correo);
-
-    console.log("🔄 Enviando formulario...");
-    await page.click("#MainContent_btnContinuar");
-
-    console.log("⏳ Esperando resultados...");
-
-    // ============================================================
-    // DETECTAR CAPTCHA DESPUÉS DEL ENVÍO
-    // ============================================================
-    let captchaResuelto = false;
-    
-    for (let i = 0; i < 15; i++) {
-      await page.waitForTimeout(2000);
+    // Intentar con diferentes puertos
+    for (let intento = 0; intento < PROXY_PORTS.length; intento++) {
+      proxyConfig = getProxyConfig();
+      console.log(`🔄 Intento ${intento + 1} con proxy: ${proxyConfig.server}`);
       
-      const modalVisible = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
-      
-      if (modalVisible) {
-        console.log("🔍 PRIMER CAPTCHA detectado, resolviendo...");
-        await resolverCaptcha(page, "primer CAPTCHA");
-        captchaResuelto = true;
-        console.log("✅ PRIMER CAPTCHA resuelto");
-        break;
-      }
-      
-      const hasDownloadBtn = await page.locator('input[title="Descarga Pdf"]').count();
-      if (hasDownloadBtn > 0) {
-        console.log("✅ Botón de descarga encontrado, no hay CAPTCHA");
-        break;
-      }
-      
-      console.log(`⏳ Esperando... (${i+1}/15)`);
-    }
-
-    // ============================================================
-    // ESPERAR EL BOTÓN DE DESCARGA
-    // ============================================================
-    try {
-      await page.waitForSelector('input[title="Descarga Pdf"]', { 
-        timeout: 60000 
-      });
-      console.log("✅ Botón de descarga encontrado");
-    } catch (error) {
-      const modalVisible = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
-      if (modalVisible) {
-        console.log("🔍 PRIMER CAPTCHA detectado, resolviendo...");
-        await resolverCaptcha(page, "primer CAPTCHA");
-        await page.waitForSelector('input[title="Descarga Pdf"]', { timeout: 30000 });
-        console.log("✅ Botón de descarga encontrado después del CAPTCHA");
-      } else {
-        const bodyText = await page.textContent("body");
-        if (bodyText && bodyText.includes("No se encontraron")) {
-          throw new Error("No se encontraron recibos para los datos proporcionados.");
-        }
-        throw new Error("No se encontró el botón de descarga. Verifica los datos.");
-      }
-    }
-
-    // ============================================================
-    // DESCARGAR PDF - MÉTODO ROBUSTO
-    // ============================================================
-    console.log("📄 Descargando PDF...");
-
-    // Opción 1: Intentar capturar la respuesta HTTP
-    try {
-      const pdfResponsePromise = page.waitForResponse(
-        response => {
-          const contentType = response.headers()['content-type'] || '';
-          const url = response.url();
-          return contentType.includes('pdf') || 
-                 contentType.includes('application/pdf') ||
-                 url.includes('.pdf') ||
-                 url.includes('DescargaRecibo');
-        },
-        { timeout: 30000 }
-      );
-
-      console.log("🔄 Haciendo clic en el botón de descarga...");
-      await page.click('input[title="Descarga Pdf"]');
-      
-      // Verificar si hay CAPTCHA después del clic
-      await page.waitForTimeout(2000);
-      const segundoModal = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
-      if (segundoModal) {
-        console.log("🔍 SEGUNDO CAPTCHA detectado, resolviendo...");
-        await resolverCaptcha(page, "segundo CAPTCHA");
-        console.log("✅ SEGUNDO CAPTCHA resuelto");
-      }
-
-      const pdfResponse = await pdfResponsePromise;
-      const pdfBuffer = await pdfResponse.body();
-      
-      if (pdfBuffer && pdfBuffer.length > 100) {
-        console.log(`✅ PDF obtenido por HTTP (${pdfBuffer.length} bytes)`);
-        await browser.close();
-        response.setHeader("Content-Type", "application/pdf");
-        response.setHeader("Content-Disposition", `attachment; filename="recibo-${parsed.data.numeroServicio}.pdf"`);
-        return response.send(pdfBuffer);
-      }
-    } catch (error) {
-      console.log("⚠️ Falló la captura HTTP, intentando método alternativo...");
-    }
-
-    // Opción 2: Usar page.evaluate para hacer fetch directo
-    try {
-      console.log("🔄 Usando fetch directo desde la página...");
-      
-      const pdfUrl = await page.evaluate(() => {
-        const btn = document.querySelector('input[title="Descarga Pdf"]');
-        if (btn) {
-          // Intentar obtener la URL del formulario
-          const form = btn.closest('form');
-          if (form) return form.action;
-        }
-        return null;
-      });
-
-      if (pdfUrl) {
-        console.log(`📄 PDF URL: ${pdfUrl}`);
-        const fetchResponse = await fetch(pdfUrl, {
-          method: 'POST',
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-          }
+      try {
+        browser = await chromium.launch({
+          headless: true,
+          proxy: proxyConfig,
+          args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-blink-features=AutomationControlled",
+          ],
         });
-        const pdfBuffer = await fetchResponse.arrayBuffer();
-        if (pdfBuffer && pdfBuffer.byteLength > 100) {
-          console.log(`✅ PDF obtenido por fetch (${pdfBuffer.byteLength} bytes)`);
-          await browser.close();
-          response.setHeader("Content-Type", "application/pdf");
-          response.setHeader("Content-Disposition", `attachment; filename="recibo-${parsed.data.numeroServicio}.pdf"`);
-          return response.send(Buffer.from(pdfBuffer));
-        }
-      }
-    } catch (error) {
-      console.log("⚠️ Falló el fetch directo:", error.message);
-    }
 
-    // Opción 3: Buscar el PDF en el HTML
-    try {
-      console.log("🔄 Buscando PDF en el HTML...");
-      const html = await page.content();
-      const pdfMatch = html.match(/https?:\/\/[^\s"']+\.pdf/);
-      if (pdfMatch) {
-        console.log(`📄 PDF URL encontrada: ${pdfMatch[0]}`);
-        const pdfFetch = await fetch(pdfMatch[0], {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-          }
+        const context = await browser.newContext({
+          acceptDownloads: true,
+          locale: "es-MX",
+          viewport: { width: 1920, height: 1080 },
+          userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         });
-        const pdfBuffer = await pdfFetch.arrayBuffer();
-        if (pdfBuffer && pdfBuffer.byteLength > 100) {
-          console.log(`✅ PDF obtenido desde HTML (${pdfBuffer.byteLength} bytes)`);
-          await browser.close();
-          response.setHeader("Content-Type", "application/pdf");
-          response.setHeader("Content-Disposition", `attachment; filename="recibo-${parsed.data.numeroServicio}.pdf"`);
-          return response.send(Buffer.from(pdfBuffer));
+
+        const page = await context.newPage();
+        page.setDefaultTimeout(120000);
+
+        console.log("🌐 Navegando a CFE...");
+        await page.goto(CFE_URL, { waitUntil: "networkidle", timeout: 60000 });
+
+        const nombreCount = await page.locator("#MainContent_txtNombre").count();
+        console.log(`📝 CAMPO NOMBRE ENCONTRADO: ${nombreCount}`);
+
+        if (nombreCount === 0) {
+          throw new Error("El formulario de CFE no apareció.");
         }
+
+        await page.waitForTimeout(2000);
+
+        console.log("📝 Llenando formulario...");
+        await safeFill(page, "#MainContent_txtNombre", parsed.data.nombreCompleto);
+        await safeFill(page, "#MainContent_txtRPU", parsed.data.numeroServicio);
+        await safeFill(page, "#MainContent_tbLada", parsed.data.lada);
+        await safeFill(page, "#MainContent_txtTel", parsed.data.telefonoFijo);
+        await safeFill(page, "#MainContent_txtCel", parsed.data.celular);
+        await safeFill(page, "#MainContent_txtCorreoElectronico", parsed.data.correo);
+
+        console.log("🔄 Enviando formulario...");
+        await page.click("#MainContent_btnContinuar");
+
+        console.log("⏳ Esperando resultados...");
+
+        // ============================================================
+        // DETECTAR CAPTCHA DESPUÉS DEL ENVÍO
+        // ============================================================
+        let captchaResuelto = false;
+        
+        for (let i = 0; i < 15; i++) {
+          await page.waitForTimeout(2000);
+          
+          const modalVisible = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
+          
+          if (modalVisible) {
+            console.log("🔍 PRIMER CAPTCHA detectado, resolviendo...");
+            await resolverCaptcha(page, "primer CAPTCHA");
+            captchaResuelto = true;
+            console.log("✅ PRIMER CAPTCHA resuelto");
+            break;
+          }
+          
+          const hasDownloadBtn = await page.locator('input[title="Descarga Pdf"]').count();
+          if (hasDownloadBtn > 0) {
+            console.log("✅ Botón de descarga encontrado, no hay CAPTCHA");
+            break;
+          }
+          
+          console.log(`⏳ Esperando... (${i+1}/15)`);
+        }
+
+        // ============================================================
+        // ESPERAR EL BOTÓN DE DESCARGA
+        // ============================================================
+        try {
+          await page.waitForSelector('input[title="Descarga Pdf"]', { 
+            timeout: 60000 
+          });
+          console.log("✅ Botón de descarga encontrado");
+        } catch (error) {
+          const modalVisible = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
+          if (modalVisible) {
+            console.log("🔍 PRIMER CAPTCHA detectado, resolviendo...");
+            await resolverCaptcha(page, "primer CAPTCHA");
+            await page.waitForSelector('input[title="Descarga Pdf"]', { timeout: 30000 });
+            console.log("✅ Botón de descarga encontrado después del CAPTCHA");
+          } else {
+            const bodyText = await page.textContent("body");
+            if (bodyText && bodyText.includes("No se encontraron")) {
+              throw new Error("No se encontraron recibos para los datos proporcionados.");
+            }
+            throw new Error("No se encontró el botón de descarga. Verifica los datos.");
+          }
+        }
+
+        // ============================================================
+        // DESCARGAR PDF
+        // ============================================================
+        console.log("📄 Descargando PDF...");
+
+        try {
+          const pdfResponsePromise = page.waitForResponse(
+            response => {
+              const contentType = response.headers()['content-type'] || '';
+              const url = response.url();
+              return contentType.includes('pdf') || 
+                     contentType.includes('application/pdf') ||
+                     url.includes('.pdf') ||
+                     url.includes('DescargaRecibo');
+            },
+            { timeout: 30000 }
+          );
+
+          console.log("🔄 Haciendo clic en el botón de descarga...");
+          await page.click('input[title="Descarga Pdf"]');
+          
+          await page.waitForTimeout(2000);
+          const segundoModal = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
+          if (segundoModal) {
+            console.log("🔍 SEGUNDO CAPTCHA detectado, resolviendo...");
+            await resolverCaptcha(page, "segundo CAPTCHA");
+            console.log("✅ SEGUNDO CAPTCHA resuelto");
+          }
+
+          const pdfResponse = await pdfResponsePromise;
+          const pdfBuffer = await pdfResponse.body();
+          
+          if (pdfBuffer && pdfBuffer.length > 100) {
+            console.log(`✅ PDF obtenido (${pdfBuffer.length} bytes)`);
+            await browser.close();
+            response.setHeader("Content-Type", "application/pdf");
+            response.setHeader("Content-Disposition", `attachment; filename="recibo-${parsed.data.numeroServicio}.pdf"`);
+            return response.send(pdfBuffer);
+          }
+        } catch (error) {
+          console.log("⚠️ Falló la captura HTTP:", error.message);
+          
+          const html = await page.content();
+          const pdfMatch = html.match(/https?:\/\/[^\s"']+\.pdf/);
+          if (pdfMatch) {
+            console.log(`📄 PDF URL encontrada: ${pdfMatch[0]}`);
+            const pdfFetch = await fetch(pdfMatch[0]);
+            const pdfBuffer = await pdfFetch.arrayBuffer();
+            if (pdfBuffer && pdfBuffer.byteLength > 100) {
+              console.log(`✅ PDF obtenido desde HTML (${pdfBuffer.byteLength} bytes)`);
+              await browser.close();
+              response.setHeader("Content-Type", "application/pdf");
+              response.setHeader("Content-Disposition", `attachment; filename="recibo-${parsed.data.numeroServicio}.pdf"`);
+              return response.send(Buffer.from(pdfBuffer));
+            }
+          }
+        }
+
+        throw new Error("No se pudo obtener el PDF");
+
+      } catch (error) {
+        console.error(`❌ Error con proxy ${proxyConfig.server}:`, error.message);
+        if (browser) await browser.close().catch(() => {});
+        browser = null;
+        continue;
       }
-    } catch (error) {
-      console.log("⚠️ Falló la búsqueda en HTML:", error.message);
     }
 
-    throw new Error("No se pudo obtener el PDF por ningún método");
+    throw new Error("Todos los proxies fallaron");
 
   } catch (error) {
-    console.error("❌ Error:", error.message);
+    console.error("❌ Error final:", error.message);
     if (browser) await browser.close().catch(() => {});
     if (!response.headersSent) {
       return response.status(500).json({
@@ -398,7 +382,7 @@ app.post("/obtener-recibo", async (request, response) => {
 app.listen(PORT, "0.0.0.0", () => {
   console.log("=".repeat(60));
   console.log(`✅ Servidor activo en el puerto ${PORT}`);
-  console.log(`🔑 Proxy: Decodo (${PROXY_CONFIG.server})`);
+  console.log(`🔑 Proxy: Decodo (rotación de ${PROXY_PORTS.length} puertos)`);
   console.log(`🔐 Anti-Captcha: ✅ Configurado`);
   console.log("=".repeat(60));
 });
