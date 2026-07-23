@@ -215,54 +215,35 @@ app.post("/obtener-recibo", async (request, response) => {
     console.log("⏳ Esperando resultados...");
 
     // ============================================================
-    // DETECTAR CAPTCHA O RESULTADOS
+    // ESPERAR EL BOTÓN DE DESCARGA DIRECTAMENTE
     // ============================================================
-    let intentos = 0;
-    let captchaResuelto = false;
-    
-    while (intentos < 10) {
-      await page.waitForTimeout(2000);
-      intentos++;
-      
-      // Verificar CAPTCHA
+    try {
+      await page.waitForSelector('#MainContent_GVHistorial_DescargaPDF_0', { 
+        timeout: 60000 
+      });
+      console.log("✅ Botón de descarga encontrado");
+    } catch (error) {
+      // Verificar si hay CAPTCHA
       const hasCaptcha = await page.locator("#MainContent_Imagemanual").count();
-      if (hasCaptcha > 0 && !captchaResuelto) {
+      if (hasCaptcha > 0) {
         console.log("🔍 CAPTCHA detectado, resolviendo...");
         await resolverCaptcha(page);
-        captchaResuelto = true;
-        console.log("✅ CAPTCHA resuelto");
-        continue;
+        console.log("✅ CAPTCHA resuelto, esperando botón...");
+        await page.waitForSelector('#MainContent_GVHistorial_DescargaPDF_0', { 
+          timeout: 30000 
+        });
+        console.log("✅ Botón de descarga encontrado después del CAPTCHA");
+      } else {
+        throw new Error("No se encontró el botón de descarga. Verifica los datos.");
       }
-      
-      // Verificar tabla de resultados
-      const hasTable = await page.locator("#MainContent_GVHistorial").count();
-      if (hasTable > 0) {
-        console.log("✅ Tabla de recibos encontrada");
-        break;
-      }
-      
-      // Verificar mensaje de error
-      const errorText = await page.textContent("body");
-      if (errorText && errorText.includes("No se encontraron")) {
-        throw new Error("No se encontraron recibos para los datos proporcionados.");
-      }
-      
-      console.log(`⏳ Esperando resultados... (${intentos}/10)`);
     }
 
     // ============================================================
     // DESCARGAR PDF
     // ============================================================
-    const downloadBtn = page.locator('#MainContent_GVHistorial_DescargaPDF_0');
-    const btnVisible = await downloadBtn.isVisible().catch(() => false);
-    
-    if (!btnVisible) {
-      throw new Error("No se encontró el botón de descarga.");
-    }
-
     console.log("📄 Descargando PDF...");
     const downloadPromise = page.waitForEvent('download', { timeout: 60000 });
-    await downloadBtn.click();
+    await page.click('#MainContent_GVHistorial_DescargaPDF_0');
     const download = await downloadPromise;
     const pdfPath = await download.path();
     const pdfBuffer = await fs.readFile(pdfPath);
