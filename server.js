@@ -15,8 +15,6 @@ const CFE_URL = "https://app.cfe.mx/Aplicaciones/CCFE/ReciboDeLuzGMX/Consulta";
 const PROXY_USERNAME = "spp9625kp7";
 const PROXY_PASSWORD = "w3rn85=sdkit1JSjIP";
 const PROXY_SERVER = "gate.decodo.com";
-
-// Puertos rotativos para cambiar de IP
 const PROXY_PORTS = [10001, 10002, 10003, 10004, 10005, 10006, 10007];
 let currentPortIndex = 0;
 
@@ -34,6 +32,25 @@ function getProxyConfig() {
 // CONFIGURACIÓN - ANTI-CAPTCHA
 // ============================================================
 const ANTICAPTCHA_KEY = "d176bfc7a9fc3028cfbec2276cf741f1";
+
+// ============================================================
+// MIDDLEWARE
+// ============================================================
+app.use(cors({ origin: true, methods: ["GET", "POST", "OPTIONS"], allowedHeaders: ["Content-Type"] }));
+app.options('*', cors());
+app.use(express.json({ limit: "20kb" }));
+
+// ============================================================
+// ESQUEMA DE VALIDACIÓN
+// ============================================================
+const schema = z.object({
+  nombreCompleto: z.string().trim().min(3).max(120),
+  numeroServicio: z.string().trim().min(1).max(24).regex(/^\d+$/),
+  lada: z.string().trim().min(2).max(5).regex(/^\d+$/),
+  telefonoFijo: z.string().trim().min(1).max(20).regex(/^\d+$/),
+  celular: z.string().trim().min(1).max(20).regex(/^\d+$/),
+  correo: z.string().trim().email().max(255),
+});
 
 // ============================================================
 // FUNCIÓN PARA RESOLVER CAPTCHA CON ANTI-CAPTCHA
@@ -127,20 +144,8 @@ async function resolverCaptcha(page, contexto = "general") {
 }
 
 // ============================================================
-// MIDDLEWARE
+// ENDPOINTS
 // ============================================================
-app.use(cors({ origin: true, methods: ["GET", "POST", "OPTIONS"], allowedHeaders: ["Content-Type"] }));
-app.use(express.json({ limit: "20kb" }));
-
-const schema = z.object({
-  nombreCompleto: z.string().trim().min(3).max(120),
-  numeroServicio: z.string().trim().min(1).max(24).regex(/^\d+$/),
-  lada: z.string().trim().min(2).max(5).regex(/^\d+$/),
-  telefonoFijo: z.string().trim().min(1).max(20).regex(/^\d+$/),
-  celular: z.string().trim().min(1).max(20).regex(/^\d+$/),
-  correo: z.string().trim().email().max(255),
-});
-
 app.get("/", (req, res) => res.json({ ok: true, servicio: "Backend de recibos activo" }));
 app.get("/health", (req, res) => res.json({ ok: true }));
 
@@ -195,7 +200,6 @@ app.post("/obtener-recibo", async (request, response) => {
     console.log(`🔢 Servicio: ${parsed.data.numeroServicio}`);
     console.log("=".repeat(60));
 
-    // Intentar con diferentes puertos
     for (let intento = 0; intento < PROXY_PORTS.length; intento++) {
       proxyConfig = getProxyConfig();
       console.log(`🔄 Intento ${intento + 1} con proxy: ${proxyConfig.server}`);
@@ -247,12 +251,12 @@ app.post("/obtener-recibo", async (request, response) => {
 
         console.log("⏳ Esperando resultados...");
 
-        // ============================================================
-        // DETECTAR CAPTCHA DESPUÉS DEL ENVÍO
-        // ============================================================
         let captchaResuelto = false;
         
-        for (let i = 0; i < 15; i++) {
+        // ============================================================
+        // ESPERAR HASTA 60 SEGUNDOS (30 INTENTOS DE 2 SEGUNDOS)
+        // ============================================================
+        for (let i = 0; i < 30; i++) {
           await page.waitForTimeout(2000);
           
           const modalVisible = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
@@ -271,12 +275,11 @@ app.post("/obtener-recibo", async (request, response) => {
             break;
           }
           
-          console.log(`⏳ Esperando... (${i+1}/15)`);
+          if (i % 5 === 0) {
+            console.log(`⏳ Esperando... (${i+1}/30) - ${(i+1)*2} segundos`);
+          }
         }
 
-        // ============================================================
-        // ESPERAR EL BOTÓN DE DESCARGA
-        // ============================================================
         try {
           await page.waitForSelector('input[title="Descarga Pdf"]', { 
             timeout: 60000 
@@ -298,9 +301,6 @@ app.post("/obtener-recibo", async (request, response) => {
           }
         }
 
-        // ============================================================
-        // DESCARGAR PDF
-        // ============================================================
         console.log("📄 Descargando PDF...");
 
         try {
