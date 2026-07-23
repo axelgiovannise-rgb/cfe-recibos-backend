@@ -262,10 +262,7 @@ app.post("/obtener-recibo", async (request, response) => {
           await safeFill(page, "#MainContent_txtCel", parsed.data.celular);
         }
 
-        // ============================================================
-        // HACER CLIC EN CONTINUAR CON FORCE
-        // ============================================================
-        console.log("🔄 Haciendo clic en Continuar...");
+        console.log("🔄 Enviando formulario...");
 
         try {
           await page.click("#MainContent_btnContinuar", { force: true, timeout: 10000 });
@@ -284,6 +281,7 @@ app.post("/obtener-recibo", async (request, response) => {
         let captchaResuelto = false;
         let botonEncontrado = false;
 
+        // Esperar la tabla de recibos
         for (let i = 0; i < 30; i++) {
           await page.waitForTimeout(2000);
           
@@ -297,7 +295,7 @@ app.post("/obtener-recibo", async (request, response) => {
             break;
           }
           
-          const hasDownloadBtn = await page.locator('input[title="Descarga Pdf"]').count();
+          const hasDownloadBtn = await page.locator('#MainContent_GVHistorial_DescargaPDF_0').count();
           if (hasDownloadBtn > 0) {
             console.log("✅ ¡Botón de descarga encontrado!");
             botonEncontrado = true;
@@ -319,6 +317,29 @@ app.post("/obtener-recibo", async (request, response) => {
 
         console.log("📄 Descargando PDF...");
 
+        // ============================================================
+        // HACER CLIC EN EL BOTÓN PDF
+        // ============================================================
+        console.log("🔄 Haciendo clic en el botón PDF...");
+        await page.click('#MainContent_GVHistorial_DescargaPDF_0');
+        console.log("✅ Clic en PDF ejecutado");
+
+        // ============================================================
+        // DETECTAR CAPTCHA DESPUÉS DEL CLIC EN PDF
+        // ============================================================
+        await page.waitForTimeout(3000);
+        
+        const captchaModal = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
+        
+        if (captchaModal) {
+          console.log("🔍 CAPTCHA detectado después del clic PDF, resolviendo...");
+          await resolverCaptcha(page, "CAPTCHA PDF");
+          console.log("✅ CAPTCHA resuelto");
+        }
+
+        // ============================================================
+        // CAPTURAR EL PDF
+        // ============================================================
         try {
           const pdfResponsePromise = page.waitForResponse(
             response => {
@@ -331,17 +352,6 @@ app.post("/obtener-recibo", async (request, response) => {
             },
             { timeout: 30000 }
           );
-
-          console.log("🔄 Haciendo clic en el botón de descarga...");
-          await page.click('input[title="Descarga Pdf"]');
-          
-          await page.waitForTimeout(2000);
-          const segundoModal = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
-          if (segundoModal) {
-            console.log("🔍 SEGUNDO CAPTCHA detectado, resolviendo...");
-            await resolverCaptcha(page, "segundo CAPTCHA");
-            console.log("✅ SEGUNDO CAPTCHA resuelto");
-          }
 
           const pdfResponse = await pdfResponsePromise;
           const pdfBuffer = await pdfResponse.body();
