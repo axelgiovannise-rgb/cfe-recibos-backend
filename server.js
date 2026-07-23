@@ -123,9 +123,6 @@ async function resolverCaptcha(page, contexto = "general") {
     
     await page.waitForTimeout(1000);
     
-    // ============================================================
-    // CAPTURAR LA IMAGEN DEL CAPTCHA DESDE EL ATRIBUTO SRC
-    // ============================================================
     const captchaImageSrc = await page.locator('#MainContent_Imagemanual').getAttribute('src');
     if (!captchaImageSrc || !captchaImageSrc.includes('data:image')) {
       throw new Error('No se pudo obtener la imagen del CAPTCHA');
@@ -287,17 +284,18 @@ app.post("/obtener-recibo", async (request, response) => {
         const rpu = parsed.data.numeroServicio;
         const lada = parsed.data.lada || "55";
         const telefono = parsed.data.telefonoFijo || "55555555";
+        const celular = parsed.data.celular || "5555555555";
         const correo = parsed.data.correo || "test@test.com";
 
+        // ============================================================
+        // SELECTORES EXACTOS DEL FORMULARIO
+        // ============================================================
         await safeFill(page, "#MainContent_txtNombre", nombre);
         await safeFill(page, "#MainContent_txtRPU", rpu);
         await safeFill(page, "#MainContent_tbLada", lada);
         await safeFill(page, "#MainContent_txtTel", telefono);
+        await safeFill(page, "#MainContent_txtCel", celular);
         await safeFill(page, "#MainContent_txtCorreoElectronico", correo);
-        
-        if (parsed.data.celular) {
-          await safeFill(page, "#MainContent_txtCel", parsed.data.celular);
-        }
 
         console.log("🔄 Enviando formulario...");
 
