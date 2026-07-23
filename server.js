@@ -3,7 +3,7 @@ import cors from "cors";
 import { chromium } from "playwright";
 import { z } from "zod";
 import fs from "node:fs/promises";
-import { Solver } from 'anticaptcha';
+import { Solver } from '@antiadmin/anticaptchaofficial';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
