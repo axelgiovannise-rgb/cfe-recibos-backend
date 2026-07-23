@@ -215,10 +215,10 @@ app.post("/obtener-recibo", async (request, response) => {
     console.log("⏳ Esperando resultados...");
 
     // ============================================================
-    // ESPERAR EL BOTÓN DE DESCARGA DIRECTAMENTE
+    // ESPERAR EL BOTÓN DE DESCARGA POR TÍTULO
     // ============================================================
     try {
-      await page.waitForSelector('#MainContent_GVHistorial_DescargaPDF_0', { 
+      await page.waitForSelector('input[title="Descarga Pdf"]', { 
         timeout: 60000 
       });
       console.log("✅ Botón de descarga encontrado");
@@ -229,11 +229,16 @@ app.post("/obtener-recibo", async (request, response) => {
         console.log("🔍 CAPTCHA detectado, resolviendo...");
         await resolverCaptcha(page);
         console.log("✅ CAPTCHA resuelto, esperando botón...");
-        await page.waitForSelector('#MainContent_GVHistorial_DescargaPDF_0', { 
+        await page.waitForSelector('input[title="Descarga Pdf"]', { 
           timeout: 30000 
         });
         console.log("✅ Botón de descarga encontrado después del CAPTCHA");
       } else {
+        // Verificar si hay mensaje de error
+        const bodyText = await page.textContent("body");
+        if (bodyText && bodyText.includes("No se encontraron")) {
+          throw new Error("No se encontraron recibos para los datos proporcionados.");
+        }
         throw new Error("No se encontró el botón de descarga. Verifica los datos.");
       }
     }
@@ -243,7 +248,7 @@ app.post("/obtener-recibo", async (request, response) => {
     // ============================================================
     console.log("📄 Descargando PDF...");
     const downloadPromise = page.waitForEvent('download', { timeout: 60000 });
-    await page.click('#MainContent_GVHistorial_DescargaPDF_0');
+    await page.click('input[title="Descarga Pdf"]');
     const download = await downloadPromise;
     const pdfPath = await download.path();
     const pdfBuffer = await fs.readFile(pdfPath);
