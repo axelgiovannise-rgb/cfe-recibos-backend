@@ -46,10 +46,10 @@ app.use(express.json({ limit: "20kb" }));
 const schema = z.object({
   nombreCompleto: z.string().trim().min(3).max(120),
   numeroServicio: z.string().trim().min(1).max(24).regex(/^\d+$/),
-  lada: z.string().trim().min(2).max(5).regex(/^\d+$/),
-  telefonoFijo: z.string().trim().min(1).max(20).regex(/^\d+$/),
-  celular: z.string().trim().min(1).max(20).regex(/^\d+$/),
-  correo: z.string().trim().email().max(255),
+  lada: z.string().trim().min(2).max(5).regex(/^\d+$/).default("55"),
+  telefonoFijo: z.string().trim().min(1).max(20).regex(/^\d+$/).default("55555555"),
+  celular: z.string().trim().min(1).max(20).regex(/^\d+$/).optional(),
+  correo: z.string().trim().email().max(255).optional(),
 });
 
 // ============================================================
@@ -172,9 +172,15 @@ app.get("/proxy-test", async (req, res) => {
 
 async function safeFill(page, selector, value, timeout = 10000) {
   try {
-    await page.waitForSelector(selector, { state: "visible", timeout });
-    await page.locator(selector).clear();
-    await page.locator(selector).fill(value);
+    const element = page.locator(selector);
+    const count = await element.count();
+    if (count === 0) {
+      console.log(`⚠️ Elemento ${selector} no encontrado, omitiendo...`);
+      return false;
+    }
+    await element.waitFor({ state: "visible", timeout });
+    await element.clear();
+    await element.fill(value);
     console.log(`✅ Llenado: ${selector}`);
     return true;
   } catch (error) {
@@ -240,22 +246,15 @@ app.post("/obtener-recibo", async (request, response) => {
 
         console.log("📝 Llenando formulario...");
 
-        // ============================================================
-        // LLENAR EL FORMULARIO CON TODOS LOS CAMPOS
-        // ============================================================
         const nombre = parsed.data.nombreCompleto;
         const rpu = parsed.data.numeroServicio;
         const lada = parsed.data.lada || "55";
         const telefono = parsed.data.telefonoFijo || "55555555";
-        const celular = parsed.data.celular || "5555555555";
-        const correo = parsed.data.correo || "test@test.com";
 
         await safeFill(page, "#MainContent_txtNombre", nombre);
         await safeFill(page, "#MainContent_txtRPU", rpu);
         await safeFill(page, "#MainContent_tbLada", lada);
         await safeFill(page, "#MainContent_txtTel", telefono);
-        await safeFill(page, "#MainContent_txtCel", celular);
-        await safeFill(page, "#MainContent_txtCorreoElectronico", correo);
 
         console.log("🔄 Enviando formulario...");
         await page.click("#MainContent_btnContinuar");
@@ -265,9 +264,7 @@ app.post("/obtener-recibo", async (request, response) => {
         let captchaResuelto = false;
         let botonEncontrado = false;
 
-        // ============================================================
-        // ESPERAR HASTA 60 SEGUNDOS
-        // ============================================================
+        // Esperar hasta 60 segundos (30 intentos de 2 segundos)
         for (let i = 0; i < 30; i++) {
           await page.waitForTimeout(2000);
           
@@ -294,17 +291,13 @@ app.post("/obtener-recibo", async (request, response) => {
         }
 
         if (!botonEncontrado) {
-          // Verificar si hay un mensaje de error en la página
           const bodyText = await page.textContent("body");
           if (bodyText && bodyText.includes("No se encontraron")) {
-            throw new Error("No se encontraron recibos para los datos proporcionados. Verifica el nombre y número de servicio.");
+            throw new Error("No se encontraron recibos para los datos proporcionados.");
           }
           throw new Error("No se encontró el botón de descarga.");
         }
 
-        // ============================================================
-        // DESCARGAR PDF
-        // ============================================================
         console.log("📄 Descargando PDF...");
 
         try {
