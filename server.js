@@ -233,20 +233,33 @@ app.post("/obtener-recibo", async (request, response) => {
     console.log("⏳ Esperando resultados...");
 
     // ============================================================
-    // DETECTAR CAPTCHA EN MODAL DESPUÉS DEL ENVÍO
+    // ESPERA ACTIVA PARA EL MODAL DEL CAPTCHA (HASTA 30 SEGUNDOS)
     // ============================================================
-    // Esperar 3 segundos para que el modal cargue
-    await page.waitForTimeout(3000);
+    let captchaResuelto = false;
     
-    // Verificar si el modal está visible
-    const modalVisible = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
-    
-    if (modalVisible) {
-      console.log("🔍 CAPTCHA en modal detectado, resolviendo...");
-      await resolverCaptcha(page);
-      console.log("✅ CAPTCHA resuelto");
-    } else {
-      console.log("ℹ️ No se detectó CAPTCHA, continuando...");
+    // Intentar detectar el modal durante 30 segundos (15 intentos de 2 segundos)
+    for (let i = 0; i < 15; i++) {
+      await page.waitForTimeout(2000);
+      
+      // Verificar si el modal está visible
+      const modalVisible = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
+      
+      if (modalVisible) {
+        console.log("🔍 CAPTCHA en modal detectado, resolviendo...");
+        await resolverCaptcha(page);
+        captchaResuelto = true;
+        console.log("✅ CAPTCHA resuelto");
+        break;
+      }
+      
+      // Verificar si ya apareció el botón de descarga
+      const hasDownloadBtn = await page.locator('input[title="Descarga Pdf"]').count();
+      if (hasDownloadBtn > 0) {
+        console.log("✅ Botón de descarga encontrado, no hay CAPTCHA");
+        break;
+      }
+      
+      console.log(`⏳ Esperando... (${i+1}/15)`);
     }
 
     // ============================================================
@@ -260,7 +273,7 @@ app.post("/obtener-recibo", async (request, response) => {
     } catch (error) {
       // Verificar si hay otro CAPTCHA
       const modalVisible2 = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
-      if (modalVisible2) {
+      if (modalVisible2 && !captchaResuelto) {
         console.log("🔍 CAPTCHA en modal detectado, resolviendo...");
         await resolverCaptcha(page);
         await page.waitForSelector('input[title="Descarga Pdf"]', { timeout: 30000 });
