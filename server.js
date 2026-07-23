@@ -94,7 +94,6 @@ async function resolverCaptcha(page) {
     
     await page.fill("#MainContent_txtCaptcha", solution);
     await page.click("#MainContent_btnValidarCaptcha");
-    await page.waitForSelector("#MainContent_GVHistorial", { timeout: 30000 });
     
     return solution;
   } catch (error) {
@@ -188,7 +187,7 @@ app.post("/obtener-recibo", async (request, response) => {
     });
 
     const page = await context.newPage();
-    page.setDefaultTimeout(90000);
+    page.setDefaultTimeout(120000);
 
     console.log("🌐 Navegando a CFE...");
     await page.goto(CFE_URL, { waitUntil: "networkidle", timeout: 60000 });
@@ -215,17 +214,45 @@ app.post("/obtener-recibo", async (request, response) => {
 
     console.log("⏳ Esperando resultados...");
 
-    const hasCaptcha = await page.locator("#MainContent_Imagemanual").count();
+    // ============================================================
+    // DETECTAR CAPTCHA O RESULTADOS
+    // ============================================================
+    let intentos = 0;
+    let captchaResuelto = false;
     
-    if (hasCaptcha > 0) {
-      console.log("🔍 CAPTCHA detectado, resolviendo...");
-      await resolverCaptcha(page);
-      console.log("✅ CAPTCHA resuelto, tabla cargada");
-    } else {
-      await page.waitForSelector("#MainContent_GVHistorial", { timeout: 30000 });
-      console.log("✅ Tabla de recibos cargada");
+    while (intentos < 10) {
+      await page.waitForTimeout(2000);
+      intentos++;
+      
+      // Verificar CAPTCHA
+      const hasCaptcha = await page.locator("#MainContent_Imagemanual").count();
+      if (hasCaptcha > 0 && !captchaResuelto) {
+        console.log("🔍 CAPTCHA detectado, resolviendo...");
+        await resolverCaptcha(page);
+        captchaResuelto = true;
+        console.log("✅ CAPTCHA resuelto");
+        continue;
+      }
+      
+      // Verificar tabla de resultados
+      const hasTable = await page.locator("#MainContent_GVHistorial").count();
+      if (hasTable > 0) {
+        console.log("✅ Tabla de recibos encontrada");
+        break;
+      }
+      
+      // Verificar mensaje de error
+      const errorText = await page.textContent("body");
+      if (errorText && errorText.includes("No se encontraron")) {
+        throw new Error("No se encontraron recibos para los datos proporcionados.");
+      }
+      
+      console.log(`⏳ Esperando resultados... (${intentos}/10)`);
     }
 
+    // ============================================================
+    // DESCARGAR PDF
+    // ============================================================
     const downloadBtn = page.locator('#MainContent_GVHistorial_DescargaPDF_0');
     const btnVisible = await downloadBtn.isVisible().catch(() => false);
     
