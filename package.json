@@ -6,10 +6,10 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "cors": "^2.8.5",
-    "zod": "^3.24.2",
-    "playwright": "^1.40.0",
-    "@antiadmin/anticaptchaofficial": "^1.0.0"
+    "express": "latest",
+    "cors": "latest",
+    "zod": "latest",
+    "playwright": "latest",
+    "@antiadmin/anticaptchaofficial": "latest"
   }
 }
