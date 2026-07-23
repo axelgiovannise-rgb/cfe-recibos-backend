@@ -178,8 +178,7 @@ async function safeFill(page, selector, value, timeout = 10000) {
       console.log(`⚠️ Elemento ${selector} no encontrado, omitiendo...`);
       return false;
     }
-    await element.waitFor({ state: "visible", timeout });
-    await element.clear();
+    // Intentar llenar sin verificar visibilidad
     await element.fill(value);
     console.log(`✅ Llenado: ${selector}`);
     return true;
@@ -247,7 +246,7 @@ app.post("/obtener-recibo", async (request, response) => {
         console.log("📝 Llenando formulario...");
 
         // ============================================================
-        // LLENAR TODOS LOS CAMPOS CON SELECTORES ALTERNATIVOS
+        // LLENAR TODOS LOS CAMPOS
         // ============================================================
         const nombre = parsed.data.nombreCompleto;
         const rpu = parsed.data.numeroServicio;
@@ -256,22 +255,12 @@ app.post("/obtener-recibo", async (request, response) => {
         const celular = parsed.data.celular || "5555555555";
         const correo = parsed.data.correo || "test@test.com";
 
-        // Lista de campos con selectores alternativos
-        const campos = [
-          { selector: "#MainContent_txtNombre", value: nombre },
-          { selector: "#MainContent_txtRPU", value: rpu },
-          { selector: "#MainContent_tbLada", value: lada },
-          { selector: "#MainContent_txtTel", value: telefono },
-          { selector: "#MainContent_txtTelefono", value: telefono },
-          { selector: "#MainContent_txtCel", value: celular },
-          { selector: "#MainContent_txtCelular", value: celular },
-          { selector: "#MainContent_txtCorreoElectronico", value: correo },
-          { selector: "#MainContent_txtCorreo", value: correo },
-        ];
-
-        for (const campo of campos) {
-          await safeFill(page, campo.selector, campo.value);
-        }
+        await safeFill(page, "#MainContent_txtNombre", nombre);
+        await safeFill(page, "#MainContent_txtRPU", rpu);
+        await safeFill(page, "#MainContent_tbLada", lada);
+        await safeFill(page, "#MainContent_txtTel", telefono);
+        await safeFill(page, "#MainContent_txtCel", celular);
+        await safeFill(page, "#MainContent_txtCorreoElectronico", correo);
 
         console.log("🔄 Enviando formulario...");
         await page.click("#MainContent_btnContinuar");
