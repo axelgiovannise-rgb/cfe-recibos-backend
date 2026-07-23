@@ -19,28 +19,23 @@ const PROXY_CONFIG = {
 };
 
 // ============================================================
-// FUNCIÓN PARA RESOLVER CAPTCHA CON ANTI-CAPTCHA (USANDO API DIRECTA)
+// CONFIGURACIÓN - ANTI-CAPTCHA
+// ============================================================
+const ANTICAPTCHA_KEY = "d176bfc7a9fc3028cfbec2276cf741f1";
+
+// ============================================================
+// FUNCIÓN PARA RESOLVER CAPTCHA CON ANTI-CAPTCHA
 // ============================================================
 async function resolverCaptchaConAntiCaptcha(imageBase64) {
-  const apiKey = process.env.ANTICAPTCHA_KEY;
-  
-  if (!apiKey) {
-    throw new Error("❌ ANTICAPTCHA_KEY no configurada en variables de entorno");
-  }
-  
   try {
-    console.log("🔄 Enviando CAPTCHA a Anti-Captcha (API directa)...");
+    console.log("🔄 Enviando CAPTCHA a Anti-Captcha...");
     
-    // 1. Enviar imagen a Anti-Captcha
     const createTaskResponse = await axios.post('https://api.anti-captcha.com/createTask', {
-      clientKey: apiKey,
+      clientKey: ANTICAPTCHA_KEY,
       task: {
         type: "ImageToTextTask",
         body: imageBase64,
-        phrase: false,
-        case: false,
         numeric: 1,
-        math: false,
         minLength: 4,
         maxLength: 6
       }
@@ -53,7 +48,6 @@ async function resolverCaptchaConAntiCaptcha(imageBase64) {
     const taskId = createTaskResponse.data.taskId;
     console.log(`📝 Task ID: ${taskId}, esperando resolución...`);
     
-    // 2. Esperar la resolución
     let attempts = 0;
     const maxAttempts = 30;
     
@@ -62,12 +56,12 @@ async function resolverCaptchaConAntiCaptcha(imageBase64) {
       attempts++;
       
       const getResultResponse = await axios.post('https://api.anti-captcha.com/getTaskResult', {
-        clientKey: apiKey,
+        clientKey: ANTICAPTCHA_KEY,
         taskId: taskId
       });
       
       if (getResultResponse.data.errorId !== 0) {
-        throw new Error(`Error obteniendo resultado: ${getResultResponse.data.errorDescription}`);
+        throw new Error(`Error: ${getResultResponse.data.errorDescription}`);
       }
       
       if (getResultResponse.data.status === 'ready') {
@@ -78,7 +72,7 @@ async function resolverCaptchaConAntiCaptcha(imageBase64) {
       console.log(`⏳ Intentando (${attempts}/${maxAttempts})...`);
     }
     
-    throw new Error("⏰ Timeout: El CAPTCHA no se resolvió a tiempo");
+    throw new Error("⏰ Timeout resolviendo CAPTCHA");
     
   } catch (error) {
     console.error("❌ Error resolviendo CAPTCHA:", error.message);
@@ -268,6 +262,6 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log("=".repeat(60));
   console.log(`✅ Servidor activo en el puerto ${PORT}`);
   console.log(`🔑 Proxy: Decodo (${PROXY_CONFIG.server})`);
-  console.log(`🔐 Anti-Captcha: ${process.env.ANTICAPTCHA_KEY ? '✅ Configurado' : '❌ No configurado'}`);
+  console.log(`🔐 Anti-Captcha: ✅ Configurado`);
   console.log("=".repeat(60));
 });
