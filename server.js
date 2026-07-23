@@ -30,15 +30,12 @@ async function resolverCaptcha(page) {
   try {
     console.log("🔍 Esperando CAPTCHA...");
     
-    // Esperar a que el CAPTCHA aparezca
     await page.waitForSelector("#MainContent_Imagemanual", { timeout: 10000 });
     
-    // Tomar captura del CAPTCHA
     const captchaImage = await page.locator("#MainContent_Imagemanual").screenshot({ encoding: "base64" });
     
     console.log("🔄 Enviando CAPTCHA a Anti-Captcha...");
     
-    // Resolver con Anti-Captcha
     const solution = await solver.imageCaptcha({
       body: captchaImage,
       numeric: 1,
@@ -48,13 +45,8 @@ async function resolverCaptcha(page) {
     
     console.log(`✅ CAPTCHA resuelto: ${solution.text}`);
     
-    // Ingresar la solución
     await page.fill("#MainContent_txtCaptcha", solution.text);
-    
-    // Hacer clic en Validar
     await page.click("#MainContent_btnValidarCaptcha");
-    
-    // Esperar a que cargue la tabla
     await page.waitForSelector("#MainContent_GVHistorial", { timeout: 30000 });
     
     return solution.text;
@@ -176,9 +168,6 @@ app.post("/obtener-recibo", async (request, response) => {
 
     console.log("⏳ Esperando resultados...");
 
-    // ============================================================
-    // DETECTAR Y RESOLVER CAPTCHA
-    // ============================================================
     const hasCaptcha = await page.locator("#MainContent_Imagemanual").count();
     
     if (hasCaptcha > 0) {
@@ -186,14 +175,10 @@ app.post("/obtener-recibo", async (request, response) => {
       await resolverCaptcha(page);
       console.log("✅ CAPTCHA resuelto, tabla cargada");
     } else {
-      // Si no hay CAPTCHA, esperar la tabla directamente
       await page.waitForSelector("#MainContent_GVHistorial", { timeout: 30000 });
       console.log("✅ Tabla de recibos cargada");
     }
 
-    // ============================================================
-    // DESCARGAR PDF
-    // ============================================================
     const downloadBtn = page.locator('#MainContent_GVHistorial_DescargaPDF_0');
     const btnVisible = await downloadBtn.isVisible().catch(() => false);
     
