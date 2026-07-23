@@ -3,7 +3,7 @@ import cors from "cors";
 import { chromium } from "playwright";
 import { z } from "zod";
 import fs from "node:fs/promises";
-import { Solver } from '@antiadmin/anticaptchaofficial';
+import axios from "axios";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -19,39 +19,92 @@ const PROXY_CONFIG = {
 };
 
 // ============================================================
-// CONFIGURACIÓN - ANTI-CAPTCHA
+// FUNCIÓN PARA RESOLVER CAPTCHA CON ANTI-CAPTCHA (USANDO API DIRECTA)
 // ============================================================
-const solver = new Solver(process.env.ANTICAPTCHA_KEY);
+async function resolverCaptchaConAntiCaptcha(imageBase64) {
+  const apiKey = process.env.ANTICAPTCHA_KEY;
+  
+  if (!apiKey) {
+    throw new Error("❌ ANTICAPTCHA_KEY no configurada en variables de entorno");
+  }
+  
+  try {
+    console.log("🔄 Enviando CAPTCHA a Anti-Captcha (API directa)...");
+    
+    // 1. Enviar imagen a Anti-Captcha
+    const createTaskResponse = await axios.post('https://api.anti-captcha.com/createTask', {
+      clientKey: apiKey,
+      task: {
+        type: "ImageToTextTask",
+        body: imageBase64,
+        phrase: false,
+        case: false,
+        numeric: 1,
+        math: false,
+        minLength: 4,
+        maxLength: 6
+      }
+    });
+    
+    if (createTaskResponse.data.errorId !== 0) {
+      throw new Error(`Error Anti-Captcha: ${createTaskResponse.data.errorDescription}`);
+    }
+    
+    const taskId = createTaskResponse.data.taskId;
+    console.log(`📝 Task ID: ${taskId}, esperando resolución...`);
+    
+    // 2. Esperar la resolución
+    let attempts = 0;
+    const maxAttempts = 30;
+    
+    while (attempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      attempts++;
+      
+      const getResultResponse = await axios.post('https://api.anti-captcha.com/getTaskResult', {
+        clientKey: apiKey,
+        taskId: taskId
+      });
+      
+      if (getResultResponse.data.errorId !== 0) {
+        throw new Error(`Error obteniendo resultado: ${getResultResponse.data.errorDescription}`);
+      }
+      
+      if (getResultResponse.data.status === 'ready') {
+        console.log(`✅ CAPTCHA resuelto: ${getResultResponse.data.solution.text}`);
+        return getResultResponse.data.solution.text;
+      }
+      
+      console.log(`⏳ Intentando (${attempts}/${maxAttempts})...`);
+    }
+    
+    throw new Error("⏰ Timeout: El CAPTCHA no se resolvió a tiempo");
+    
+  } catch (error) {
+    console.error("❌ Error resolviendo CAPTCHA:", error.message);
+    throw error;
+  }
+}
 
 // ============================================================
-// FUNCIÓN PARA RESOLVER CAPTCHA
+// FUNCIÓN PARA RESOLVER CAPTCHA EN PLAYWRIGHT
 // ============================================================
 async function resolverCaptcha(page) {
   try {
     console.log("🔍 Esperando CAPTCHA...");
-    
     await page.waitForSelector("#MainContent_Imagemanual", { timeout: 10000 });
     
     const captchaImage = await page.locator("#MainContent_Imagemanual").screenshot({ encoding: "base64" });
     
-    console.log("🔄 Enviando CAPTCHA a Anti-Captcha...");
+    const solution = await resolverCaptchaConAntiCaptcha(captchaImage);
     
-    const solution = await solver.imageCaptcha({
-      body: captchaImage,
-      numeric: 1,
-      minLen: 4,
-      maxLen: 6,
-    });
-    
-    console.log(`✅ CAPTCHA resuelto: ${solution.text}`);
-    
-    await page.fill("#MainContent_txtCaptcha", solution.text);
+    await page.fill("#MainContent_txtCaptcha", solution);
     await page.click("#MainContent_btnValidarCaptcha");
     await page.waitForSelector("#MainContent_GVHistorial", { timeout: 30000 });
     
-    return solution.text;
+    return solution;
   } catch (error) {
-    console.error("❌ Error resolviendo CAPTCHA:", error.message);
+    console.error("❌ Error en resolución:", error.message);
     throw error;
   }
 }
