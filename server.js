@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import axios from "axios";
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 const CFE_URL = "https://app.cfe.mx/Aplicaciones/CCFE/ReciboDeLuzGMX/Consulta";
 
 // ============================================================
