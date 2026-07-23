@@ -170,7 +170,10 @@ app.get("/proxy-test", async (req, res) => {
   }
 });
 
-async function safeFill(page, selector, value, timeout = 10000) {
+// ============================================================
+// FUNCIÓN PARA LLENAR SOLO CAMPOS VISIBLES
+// ============================================================
+async function safeFill(page, selector, value, timeout = 5000) {
   try {
     const element = page.locator(selector);
     const count = await element.count();
@@ -178,7 +181,19 @@ async function safeFill(page, selector, value, timeout = 10000) {
       console.log(`⚠️ Elemento ${selector} no encontrado, omitiendo...`);
       return false;
     }
-    await element.waitFor({ state: "visible", timeout: 5000 });
+    
+    const isVisible = await element.isVisible().catch(() => false);
+    if (!isVisible) {
+      console.log(`⚠️ Elemento ${selector} no visible, omitiendo...`);
+      return false;
+    }
+    
+    const isDisabled = await element.isDisabled().catch(() => false);
+    if (isDisabled) {
+      console.log(`⚠️ Elemento ${selector} deshabilitado, omitiendo...`);
+      return false;
+    }
+    
     await element.clear();
     await element.fill(value);
     console.log(`✅ Llenado: ${selector}`);
@@ -247,7 +262,7 @@ app.post("/obtener-recibo", async (request, response) => {
         console.log("📝 Llenando formulario...");
 
         // ============================================================
-        // LLENAR CAMPOS
+        // LLENAR SOLO CAMPOS VISIBLES
         // ============================================================
         const nombre = parsed.data.nombreCompleto;
         const rpu = parsed.data.numeroServicio;
@@ -259,30 +274,10 @@ app.post("/obtener-recibo", async (request, response) => {
         await safeFill(page, "#MainContent_txtRPU", rpu);
         await safeFill(page, "#MainContent_tbLada", lada);
         await safeFill(page, "#MainContent_txtTel", telefono);
-
-        // ============================================================
-        // BUSCAR CORREO CON SELECTORES ALTERNATIVOS
-        // ============================================================
-        const correoSelectores = [
-          "#MainContent_txtCorreoElectronico",
-          "#MainContent_txtCorreo",
-          "#MainContent_txtEmail",
-          "input[placeholder*='ejemplo']",
-          "input[type='email']",
-        ];
-
-        let correoLlenado = false;
-        for (const selector of correoSelectores) {
-          const llenado = await safeFill(page, selector, correo);
-          if (llenado) {
-            correoLlenado = true;
-            console.log(`✅ Correo llenado con: ${selector}`);
-            break;
-          }
-        }
-
-        if (!correoLlenado) {
-          console.log("⚠️ No se encontró el campo de correo");
+        await safeFill(page, "#MainContent_txtCorreoElectronico", correo);
+        
+        if (parsed.data.celular) {
+          await safeFill(page, "#MainContent_txtCel", parsed.data.celular);
         }
 
         console.log("🔄 Enviando formulario...");
