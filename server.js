@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 3001;
 const CFE_URL = "https://app.cfe.mx/Aplicaciones/CCFE/ReciboDeLuzGMX/Consulta";
 
 // ============================================================
-// CONFIGURACIÓN - DECODO
+// CONFIGURACIÓN - DECODO (ROTACIÓN DE PUERTOS)
 // ============================================================
 const PROXY_USERNAME = "spp9625kp7";
 const PROXY_PASSWORD = "w3rn85=sdkit1JSjIP";
@@ -287,9 +287,6 @@ app.post("/obtener-recibo", async (request, response) => {
         const celular = parsed.data.celular || "5555555555";
         const correo = parsed.data.correo || "test@test.com";
 
-        // ============================================================
-        // SELECTORES EXACTOS DEL FORMULARIO
-        // ============================================================
         await safeFill(page, "#MainContent_txtNombre", nombre);
         await safeFill(page, "#MainContent_txtRPU", rpu);
         await safeFill(page, "#MainContent_tbLada", lada);
@@ -311,60 +308,50 @@ app.post("/obtener-recibo", async (request, response) => {
           console.log("✅ Clic en Continuar ejecutado con evaluate");
         }
 
-        console.log("⏳ Esperando resultados...");
+        // ============================================================
+        // ESPERAR BOTÓN DE DESCARGA (TABLA DE RECIBOS)
+        // ============================================================
+        console.log("⏳ Esperando botón de descarga...");
 
-        let captchaResuelto = false;
-        let botonEncontrado = false;
-
-        for (let i = 0; i < 30; i++) {
-          await page.waitForTimeout(2000);
+        try {
+          await page.waitForSelector('#MainContent_GVHistorial_DescargaPDF_0', { 
+            timeout: 30000 
+          });
+          console.log("✅ Botón de descarga encontrado");
+        } catch (error) {
+          console.log("⚠️ No se encontró el botón de descarga");
           
-          const modalVisible = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
+          // Guardar evidencia
+          await page.screenshot({ path: 'cfe_sin_boton.png', fullPage: true });
+          const html = await page.content();
+          console.log('📄 HTML:', html.slice(0, 2000));
           
-          if (modalVisible) {
-            console.log("🔍 CAPTCHA detectado, resolviendo...");
-            await resolverCaptcha(page, "CAPTCHA");
-            captchaResuelto = true;
-            console.log("✅ CAPTCHA resuelto");
-            break;
-          }
-          
-          const hasDownloadBtn = await page.locator('#MainContent_GVHistorial_DescargaPDF_0').count();
-          if (hasDownloadBtn > 0) {
-            console.log("✅ ¡Botón de descarga encontrado!");
-            botonEncontrado = true;
-            break;
-          }
-          
-          if (i % 5 === 0) {
-            console.log(`⏳ Esperando... (${i+1}/30)`);
-          }
+          throw new Error("No se encontró el botón de descarga");
         }
 
-        if (!botonEncontrado) {
-          const bodyText = await page.textContent("body");
-          if (bodyText && bodyText.includes("No se encontraron")) {
-            throw new Error("No se encontraron recibos para los datos proporcionados.");
-          }
-          throw new Error("No se encontró el botón de descarga.");
-        }
-
-        console.log("📄 Descargando PDF...");
-
-        console.log("🔄 Haciendo clic en el botón PDF...");
+        // ============================================================
+        // HACER CLIC EN EL BOTÓN PDF
+        // ============================================================
+        console.log("📄 Haciendo clic en el botón PDF...");
         await page.click('#MainContent_GVHistorial_DescargaPDF_0');
         console.log("✅ Clic en PDF ejecutado");
 
+        // ============================================================
+        // DETECTAR CAPTCHA
+        // ============================================================
         await page.waitForTimeout(3000);
         
         const captchaModal = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
         
         if (captchaModal) {
-          console.log("🔍 CAPTCHA detectado después del clic PDF, resolviendo...");
+          console.log("🔍 CAPTCHA detectado, resolviendo...");
           await resolverCaptcha(page, "CAPTCHA PDF");
           console.log("✅ CAPTCHA resuelto");
         }
 
+        // ============================================================
+        // CAPTURAR EL PDF
+        // ============================================================
         try {
           const pdfResponsePromise = page.waitForResponse(
             response => {
