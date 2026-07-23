@@ -85,32 +85,32 @@ async function resolverCaptchaConAntiCaptcha(imageBase64) {
 // ============================================================
 async function resolverCaptcha(page) {
   try {
-    console.log("🔍 Esperando CAPTCHA...");
+    console.log("🔍 Esperando CAPTCHA en modal...");
     
-    // Esperar a que el modal aparezca (hasta 30 segundos)
-    await page.waitForSelector('.modal, .modal-content, [class*="modal"]', { 
+    // Esperar a que el modal aparezca usando el ID exacto
+    await page.waitForSelector('#myModalRevisarNumero', { 
       timeout: 30000 
     });
     console.log("✅ Modal de CAPTCHA encontrado");
     
     // Esperar un momento para que cargue la imagen
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(1000);
     
-    // Tomar captura del CAPTCHA
-    const captchaImage = await page.locator('#MainContent_Imagemanual, #MainContent_ImagenManual, img[src*="data:image/png;base64"]').first().screenshot({ encoding: "base64" });
+    // Tomar captura de la imagen del CAPTCHA
+    const captchaImage = await page.locator('#MainContent_Imagemanual').screenshot({ encoding: "base64" });
     
     const solution = await resolverCaptchaConAntiCaptcha(captchaImage);
     
     // Llenar el campo del CAPTCHA
-    await page.fill('#MainContent_txtCaptcha, input[type="text"][maxlength="10"]', solution);
+    await page.fill('#MainContent_txtCaptcha', solution);
     console.log(`✅ CAPTCHA llenado con: ${solution}`);
     
     // Hacer clic en "Aceptar"
-    await page.click('#MainContent_btnAceptar, input[value="Aceptar"], button:has-text("Aceptar")');
+    await page.click('#MainContent_btnAceptar');
     console.log("✅ Botón Aceptar presionado");
     
     // Esperar a que el modal se cierre
-    await page.waitForTimeout(3000);
+    await page.waitForSelector('#myModalRevisarNumero', { state: 'hidden', timeout: 10000 });
     console.log("✅ Modal cerrado");
     
     return solution;
@@ -235,13 +235,13 @@ app.post("/obtener-recibo", async (request, response) => {
     // ============================================================
     // DETECTAR CAPTCHA EN MODAL DESPUÉS DEL ENVÍO
     // ============================================================
-    await page.waitForTimeout(5000); // Esperar 5 segundos para que cargue
+    // Esperar 3 segundos para que el modal cargue
+    await page.waitForTimeout(3000);
     
-    // Verificar si hay un modal visible
-    const modalCount = await page.locator('.modal, .modal-content, [class*="modal"]').count();
-    console.log(`📊 Modales encontrados: ${modalCount}`);
+    // Verificar si el modal está visible
+    const modalVisible = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
     
-    if (modalCount > 0) {
+    if (modalVisible) {
       console.log("🔍 CAPTCHA en modal detectado, resolviendo...");
       await resolverCaptcha(page);
       console.log("✅ CAPTCHA resuelto");
@@ -259,8 +259,8 @@ app.post("/obtener-recibo", async (request, response) => {
       console.log("✅ Botón de descarga encontrado");
     } catch (error) {
       // Verificar si hay otro CAPTCHA
-      const modalCount2 = await page.locator('.modal, .modal-content, [class*="modal"]').count();
-      if (modalCount2 > 0) {
+      const modalVisible2 = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
+      if (modalVisible2) {
         console.log("🔍 CAPTCHA en modal detectado, resolviendo...");
         await resolverCaptcha(page);
         await page.waitForSelector('input[title="Descarga Pdf"]', { timeout: 30000 });
