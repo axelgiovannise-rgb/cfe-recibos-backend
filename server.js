@@ -3,13 +3,14 @@ import cors from "cors";
 import { chromium } from "playwright";
 import { z } from "zod";
 import fs from "node:fs/promises";
+import { Solver } from 'anticaptcha';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const CFE_URL = "https://app.cfe.mx/Aplicaciones/CCFE/ReciboDeLuzGMX/Consulta";
 
 // ============================================================
-// CONFIGURACIÓN - DECODO (PROXY FUNCIONANDO)
+// CONFIGURACIÓN - DECODO
 // ============================================================
 const PROXY_CONFIG = {
   server: 'http://mx.decodo.com:20001',
@@ -17,24 +18,67 @@ const PROXY_CONFIG = {
   password: 'w3rn85=sdkit1JSjIP',
 };
 
+// ============================================================
+// CONFIGURACIÓN - ANTI-CAPTCHA
+// ============================================================
+const solver = new Solver(process.env.ANTICAPTCHA_KEY);
+
+// ============================================================
+// FUNCIÓN PARA RESOLVER CAPTCHA
+// ============================================================
+async function resolverCaptcha(page) {
+  try {
+    console.log("🔍 Esperando CAPTCHA...");
+    
+    // Esperar a que el CAPTCHA aparezca
+    await page.waitForSelector("#MainContent_Imagemanual", { timeout: 10000 });
+    
+    // Tomar captura del CAPTCHA
+    const captchaImage = await page.locator("#MainContent_Imagemanual").screenshot({ encoding: "base64" });
+    
+    console.log("🔄 Enviando CAPTCHA a Anti-Captcha...");
+    
+    // Resolver con Anti-Captcha
+    const solution = await solver.imageCaptcha({
+      body: captchaImage,
+      numeric: 1,
+      minLen: 4,
+      maxLen: 6,
+    });
+    
+    console.log(`✅ CAPTCHA resuelto: ${solution.text}`);
+    
+    // Ingresar la solución
+    await page.fill("#MainContent_txtCaptcha", solution.text);
+    
+    // Hacer clic en Validar
+    await page.click("#MainContent_btnValidarCaptcha");
+    
+    // Esperar a que cargue la tabla
+    await page.waitForSelector("#MainContent_GVHistorial", { timeout: 30000 });
+    
+    return solution.text;
+  } catch (error) {
+    console.error("❌ Error resolviendo CAPTCHA:", error.message);
+    throw error;
+  }
+}
+
+// ============================================================
+// MIDDLEWARE
+// ============================================================
 app.use(cors({ origin: true, methods: ["GET", "POST", "OPTIONS"], allowedHeaders: ["Content-Type"] }));
 app.use(express.json({ limit: "20kb" }));
 
-// ============================================================
-// ESQUEMA DE VALIDACIÓN - SOLO CAMPOS OBLIGATORIOS
-// ============================================================
 const schema = z.object({
   nombreCompleto: z.string().trim().min(3).max(120),
   numeroServicio: z.string().trim().min(1).max(24).regex(/^\d+$/),
-  lada: z.string().trim().min(2).max(5).regex(/^\d+$/).default("55"),
-  telefonoFijo: z.string().trim().min(1).max(20).regex(/^\d+$/).default("55555555"),
-  celular: z.string().trim().min(1).max(20).regex(/^\d+$/).default("5555555555"),
-  correo: z.string().trim().email().max(255).default("test@test.com"),
+  lada: z.string().trim().min(2).max(5).regex(/^\d+$/),
+  telefonoFijo: z.string().trim().min(1).max(20).regex(/^\d+$/),
+  celular: z.string().trim().min(1).max(20).regex(/^\d+$/),
+  correo: z.string().trim().email().max(255),
 });
 
-// ============================================================
-// ENDPOINTS
-// ============================================================
 app.get("/", (req, res) => res.json({ ok: true, servicio: "Backend de recibos activo" }));
 app.get("/health", (req, res) => res.json({ ok: true }));
 
@@ -70,27 +114,20 @@ async function safeFill(page, selector, value, timeout = 10000) {
   }
 }
 
-// ============================================================
-// ENDPOINT PRINCIPAL - OBTENER RECIBO
-// ============================================================
 app.post("/obtener-recibo", async (request, response) => {
   const parsed = schema.safeParse(request.body);
   if (!parsed.success) {
-    return response.status(400).json({ 
-      error: "Datos inválidos. Nombre y número de servicio son obligatorios.",
-      detalles: parsed.error.issues
-    });
+    return response.status(400).json({ error: "Datos inválidos." });
   }
 
   let browser;
 
   try {
     console.log("=".repeat(60));
-    console.log("🚀 OBTENIENDO RECIBO CFE");
+    console.log("🚀 OBTENIENDO RECIBO");
     console.log("=".repeat(60));
-    console.log(`👤 Nombre: ${parsed.data.nombreCompleto}`);
+    console.log(`👤 Usuario: ${parsed.data.nombreCompleto}`);
     console.log(`🔢 Servicio: ${parsed.data.numeroServicio}`);
-    console.log(`📧 Correo: ${parsed.data.correo}`);
     console.log("=".repeat(60));
 
     browser = await chromium.launch({
@@ -115,20 +152,9 @@ app.post("/obtener-recibo", async (request, response) => {
     page.setDefaultTimeout(90000);
 
     console.log("🌐 Navegando a CFE...");
-    const navigationResponse = await page.goto(CFE_URL, {
-      waitUntil: "networkidle",
-      timeout: 60000,
-    });
+    await page.goto(CFE_URL, { waitUntil: "networkidle", timeout: 60000 });
 
-    const statusCode = navigationResponse?.status() ?? 0;
-    console.log(`📡 CFE STATUS: ${statusCode}`);
-
-    if (statusCode >= 400) {
-      throw new Error(`CFE respondió con estado ${statusCode}`);
-    }
-
-    const nombreField = page.locator("#MainContent_txtNombre");
-    const nombreCount = await nombreField.count();
+    const nombreCount = await page.locator("#MainContent_txtNombre").count();
     console.log(`📝 CAMPO NOMBRE ENCONTRADO: ${nombreCount}`);
 
     if (nombreCount === 0) {
@@ -146,67 +172,55 @@ app.post("/obtener-recibo", async (request, response) => {
     await safeFill(page, "#MainContent_txtCorreoElectronico", parsed.data.correo);
 
     console.log("🔄 Enviando formulario...");
-    const continuarBtn = page.locator("#MainContent_btnContinuar");
-    await continuarBtn.waitFor({ state: "visible", timeout: 10000 });
-    await continuarBtn.click();
+    await page.click("#MainContent_btnContinuar");
 
-    console.log("⏳ Esperando resultados... (hasta 60 segundos)");
+    console.log("⏳ Esperando resultados...");
 
-    // Esperar el botón de descarga
-    const pdfSelector = '#MainContent_GVHistorial_DescargaPDF_0';
+    // ============================================================
+    // DETECTAR Y RESOLVER CAPTCHA
+    // ============================================================
+    const hasCaptcha = await page.locator("#MainContent_Imagemanual").count();
     
-    try {
-      await page.waitForSelector(pdfSelector, { 
-        state: 'visible', 
-        timeout: 60000 
-      });
-      console.log('✅ Botón de descarga encontrado');
-      
-      console.log("📄 Descargando PDF...");
-      const downloadPromise = page.waitForEvent('download', { timeout: 60000 });
-      await page.click(pdfSelector);
-      
-      const download = await downloadPromise;
-      const downloadPath = await download.path();
-
-      if (!downloadPath) throw new Error("No se generó el archivo.");
-
-      const pdfBuffer = await fs.readFile(downloadPath);
-
-      if (pdfBuffer.length < 4 || pdfBuffer.subarray(0, 4).toString() !== "%PDF") {
-        throw new Error("El archivo no es un PDF válido.");
-      }
-
-      await browser.close();
-      console.log(`✅ PDF obtenido correctamente (${pdfBuffer.length} bytes)`);
-
-      response.setHeader("Content-Type", "application/pdf");
-      response.setHeader("Content-Disposition", `attachment; filename="recibo-${parsed.data.numeroServicio}.pdf"`);
-      response.setHeader("Cache-Control", "no-store, max-age=0");
-      return response.status(200).send(pdfBuffer);
-      
-    } catch (error) {
-      // Si no hay botón, buscar mensaje de error
-      const errorMessage = await page.locator([
-        ".validation-summary-errors",
-        ".field-validation-error",
-        "[id*='lblMensaje']",
-        "[class*='error']"
-      ].join(",")).textContent().catch(() => null);
-      
-      if (errorMessage && errorMessage.trim()) {
-        throw new Error(`CFE dice: ${errorMessage.trim()}`);
-      }
-      
-      throw new Error("No se encontró el botón de descarga. Verifica que el nombre y número de servicio sean correctos.");
+    if (hasCaptcha > 0) {
+      console.log("🔍 CAPTCHA detectado, resolviendo...");
+      await resolverCaptcha(page);
+      console.log("✅ CAPTCHA resuelto, tabla cargada");
+    } else {
+      // Si no hay CAPTCHA, esperar la tabla directamente
+      await page.waitForSelector("#MainContent_GVHistorial", { timeout: 30000 });
+      console.log("✅ Tabla de recibos cargada");
     }
+
+    // ============================================================
+    // DESCARGAR PDF
+    // ============================================================
+    const downloadBtn = page.locator('#MainContent_GVHistorial_DescargaPDF_0');
+    const btnVisible = await downloadBtn.isVisible().catch(() => false);
+    
+    if (!btnVisible) {
+      throw new Error("No se encontró el botón de descarga.");
+    }
+
+    console.log("📄 Descargando PDF...");
+    const downloadPromise = page.waitForEvent('download', { timeout: 60000 });
+    await downloadBtn.click();
+    const download = await downloadPromise;
+    const pdfPath = await download.path();
+    const pdfBuffer = await fs.readFile(pdfPath);
+    
+    await browser.close();
+    console.log(`✅ PDF obtenido (${pdfBuffer.length} bytes)`);
+    
+    response.setHeader("Content-Type", "application/pdf");
+    response.setHeader("Content-Disposition", `attachment; filename="recibo-${parsed.data.numeroServicio}.pdf"`);
+    return response.send(pdfBuffer);
 
   } catch (error) {
     console.error("❌ Error:", error.message);
     if (browser) await browser.close().catch(() => {});
     if (!response.headersSent) {
       return response.status(500).json({
-        error: error.message || "No fue posible obtener el recibo. Verifica los datos.",
+        error: error.message || "No fue posible obtener el recibo.",
       });
     }
   }
@@ -216,5 +230,6 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log("=".repeat(60));
   console.log(`✅ Servidor activo en el puerto ${PORT}`);
   console.log(`🔑 Proxy: Decodo (${PROXY_CONFIG.server})`);
+  console.log(`🔐 Anti-Captcha: ${process.env.ANTICAPTCHA_KEY ? '✅ Configurado' : '❌ No configurado'}`);
   console.log("=".repeat(60));
 });
