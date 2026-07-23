@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 3001;
 const CFE_URL = "https://app.cfe.mx/Aplicaciones/CCFE/ReciboDeLuzGMX/Consulta";
 
 // ============================================================
-// CONFIGURACIÓN - DECODO (ROTACIÓN DE PUERTOS)
+// CONFIGURACIÓN - DECODO
 // ============================================================
 const PROXY_USERNAME = "spp9625kp7";
 const PROXY_PASSWORD = "w3rn85=sdkit1JSjIP";
@@ -239,12 +239,23 @@ app.post("/obtener-recibo", async (request, response) => {
         await page.waitForTimeout(2000);
 
         console.log("📝 Llenando formulario...");
-        await safeFill(page, "#MainContent_txtNombre", parsed.data.nombreCompleto);
-        await safeFill(page, "#MainContent_txtRPU", parsed.data.numeroServicio);
-        await safeFill(page, "#MainContent_tbLada", parsed.data.lada);
-        await safeFill(page, "#MainContent_txtTel", parsed.data.telefonoFijo);
-        await safeFill(page, "#MainContent_txtCel", parsed.data.celular);
-        await safeFill(page, "#MainContent_txtCorreoElectronico", parsed.data.correo);
+
+        // ============================================================
+        // LLENAR EL FORMULARIO CON TODOS LOS CAMPOS
+        // ============================================================
+        const nombre = parsed.data.nombreCompleto;
+        const rpu = parsed.data.numeroServicio;
+        const lada = parsed.data.lada || "55";
+        const telefono = parsed.data.telefonoFijo || "55555555";
+        const celular = parsed.data.celular || "5555555555";
+        const correo = parsed.data.correo || "test@test.com";
+
+        await safeFill(page, "#MainContent_txtNombre", nombre);
+        await safeFill(page, "#MainContent_txtRPU", rpu);
+        await safeFill(page, "#MainContent_tbLada", lada);
+        await safeFill(page, "#MainContent_txtTel", telefono);
+        await safeFill(page, "#MainContent_txtCel", celular);
+        await safeFill(page, "#MainContent_txtCorreoElectronico", correo);
 
         console.log("🔄 Enviando formulario...");
         await page.click("#MainContent_btnContinuar");
@@ -252,9 +263,10 @@ app.post("/obtener-recibo", async (request, response) => {
         console.log("⏳ Esperando resultados...");
 
         let captchaResuelto = false;
-        
+        let botonEncontrado = false;
+
         // ============================================================
-        // ESPERAR HASTA 60 SEGUNDOS (30 INTENTOS DE 2 SEGUNDOS)
+        // ESPERAR HASTA 60 SEGUNDOS
         // ============================================================
         for (let i = 0; i < 30; i++) {
           await page.waitForTimeout(2000);
@@ -262,45 +274,37 @@ app.post("/obtener-recibo", async (request, response) => {
           const modalVisible = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
           
           if (modalVisible) {
-            console.log("🔍 PRIMER CAPTCHA detectado, resolviendo...");
-            await resolverCaptcha(page, "primer CAPTCHA");
+            console.log("🔍 CAPTCHA detectado, resolviendo...");
+            await resolverCaptcha(page, "CAPTCHA");
             captchaResuelto = true;
-            console.log("✅ PRIMER CAPTCHA resuelto");
+            console.log("✅ CAPTCHA resuelto");
             break;
           }
           
           const hasDownloadBtn = await page.locator('input[title="Descarga Pdf"]').count();
           if (hasDownloadBtn > 0) {
-            console.log("✅ Botón de descarga encontrado, no hay CAPTCHA");
+            console.log("✅ ¡Botón de descarga encontrado!");
+            botonEncontrado = true;
             break;
           }
           
           if (i % 5 === 0) {
-            console.log(`⏳ Esperando... (${i+1}/30) - ${(i+1)*2} segundos`);
+            console.log(`⏳ Esperando... (${i+1}/30)`);
           }
         }
 
-        try {
-          await page.waitForSelector('input[title="Descarga Pdf"]', { 
-            timeout: 60000 
-          });
-          console.log("✅ Botón de descarga encontrado");
-        } catch (error) {
-          const modalVisible = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
-          if (modalVisible) {
-            console.log("🔍 PRIMER CAPTCHA detectado, resolviendo...");
-            await resolverCaptcha(page, "primer CAPTCHA");
-            await page.waitForSelector('input[title="Descarga Pdf"]', { timeout: 30000 });
-            console.log("✅ Botón de descarga encontrado después del CAPTCHA");
-          } else {
-            const bodyText = await page.textContent("body");
-            if (bodyText && bodyText.includes("No se encontraron")) {
-              throw new Error("No se encontraron recibos para los datos proporcionados.");
-            }
-            throw new Error("No se encontró el botón de descarga. Verifica los datos.");
+        if (!botonEncontrado) {
+          // Verificar si hay un mensaje de error en la página
+          const bodyText = await page.textContent("body");
+          if (bodyText && bodyText.includes("No se encontraron")) {
+            throw new Error("No se encontraron recibos para los datos proporcionados. Verifica el nombre y número de servicio.");
           }
+          throw new Error("No se encontró el botón de descarga.");
         }
 
+        // ============================================================
+        // DESCARGAR PDF
+        // ============================================================
         console.log("📄 Descargando PDF...");
 
         try {
