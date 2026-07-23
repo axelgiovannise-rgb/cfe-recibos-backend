@@ -83,33 +83,38 @@ async function resolverCaptchaConAntiCaptcha(imageBase64) {
 // ============================================================
 // FUNCIÓN PARA RESOLVER CAPTCHA EN PLAYWRIGHT
 // ============================================================
-async function resolverCaptcha(page) {
+async function resolverCaptcha(page, contexto = "general") {
   try {
-    console.log("🔍 Esperando CAPTCHA en modal...");
+    console.log(`🔍 Esperando CAPTCHA (${contexto})...`);
     
+    // Esperar a que el modal aparezca
     await page.waitForSelector('#myModalRevisarNumero', { 
-      timeout: 30000 
+      timeout: 15000 
     });
-    console.log("✅ Modal de CAPTCHA encontrado");
+    console.log(`✅ Modal de CAPTCHA encontrado (${contexto})`);
     
     await page.waitForTimeout(1000);
     
+    // Tomar captura de la imagen del CAPTCHA
     const captchaImage = await page.locator('#MainContent_Imagemanual').screenshot({ encoding: "base64" });
     
     const solution = await resolverCaptchaConAntiCaptcha(captchaImage);
     
+    // Llenar el campo del CAPTCHA
     await page.fill('#MainContent_txtCaptcha', solution);
-    console.log(`✅ CAPTCHA llenado con: ${solution}`);
+    console.log(`✅ CAPTCHA llenado con: ${solution} (${contexto})`);
     
+    // Hacer clic en "Aceptar"
     await page.click('#MainContent_btnAceptar');
-    console.log("✅ Botón Aceptar presionado");
+    console.log(`✅ Botón Aceptar presionado (${contexto})`);
     
+    // Esperar a que el modal se cierre
     await page.waitForSelector('#myModalRevisarNumero', { state: 'hidden', timeout: 10000 });
-    console.log("✅ Modal cerrado");
+    console.log(`✅ Modal cerrado (${contexto})`);
     
     return solution;
   } catch (error) {
-    console.error("❌ Error en resolución:", error.message);
+    console.error(`❌ Error en resolución (${contexto}):`, error.message);
     throw error;
   }
 }
@@ -227,20 +232,21 @@ app.post("/obtener-recibo", async (request, response) => {
     console.log("⏳ Esperando resultados...");
 
     // ============================================================
-    // ESPERA ACTIVA PARA EL MODAL DEL CAPTCHA
+    // PRIMER CAPTCHA (Después del envío del formulario)
     // ============================================================
     let captchaResuelto = false;
     
+    // Esperar a que el modal aparezca (15 intentos de 2 segundos = 30 segundos)
     for (let i = 0; i < 15; i++) {
       await page.waitForTimeout(2000);
       
       const modalVisible = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
       
       if (modalVisible) {
-        console.log("🔍 CAPTCHA en modal detectado, resolviendo...");
-        await resolverCaptcha(page);
+        console.log("🔍 PRIMER CAPTCHA detectado, resolviendo...");
+        await resolverCaptcha(page, "primer CAPTCHA");
         captchaResuelto = true;
-        console.log("✅ CAPTCHA resuelto");
+        console.log("✅ PRIMER CAPTCHA resuelto");
         break;
       }
       
@@ -254,20 +260,83 @@ app.post("/obtener-recibo", async (request, response) => {
     }
 
     // ============================================================
-    // CAPTURAR EL PDF COMO RESPUESTA HTTP
+    // ESPERAR EL BOTÓN DE DESCARGA
     // ============================================================
-    console.log("📄 Capturando PDF...");
+    try {
+      await page.waitForSelector('input[title="Descarga Pdf"]', { 
+        timeout: 60000 
+      });
+      console.log("✅ Botón de descarga encontrado");
+    } catch (error) {
+      // Verificar si hay CAPTCHA
+      const modalVisible = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
+      if (modalVisible) {
+        console.log("🔍 PRIMER CAPTCHA detectado, resolviendo...");
+        await resolverCaptcha(page, "primer CAPTCHA");
+        await page.waitForSelector('input[title="Descarga Pdf"]', { timeout: 30000 });
+        console.log("✅ Botón de descarga encontrado después del CAPTCHA");
+      } else {
+        const bodyText = await page.textContent("body");
+        if (bodyText && bodyText.includes("No se encontraron")) {
+          throw new Error("No se encontraron recibos para los datos proporcionados.");
+        }
+        throw new Error("No se encontró el botón de descarga. Verifica los datos.");
+      }
+    }
 
-    // Interceptar la respuesta del PDF
-    const pdfResponse = await page.waitForResponse(
+    // ============================================================
+    // SEGUNDO CAPTCHA (Al hacer clic en el botón de descarga)
+    // ============================================================
+    console.log("📄 Haciendo clic en el botón de descarga...");
+    
+    // Configurar la espera de la respuesta del PDF
+    const pdfResponsePromise = page.waitForResponse(
       response => {
         const contentType = response.headers()['content-type'] || '';
-        return contentType.includes('pdf') || contentType.includes('application/pdf');
+        const url = response.url();
+        return contentType.includes('pdf') || 
+               contentType.includes('application/pdf') ||
+               url.includes('DescargaRecibo') ||
+               url.includes('CFEGarcia');
       },
       { timeout: 60000 }
     );
 
-    // Obtener el PDF como buffer
+    // Hacer clic en el botón de descarga
+    await page.click('input[title="Descarga Pdf"]');
+
+    // ============================================================
+    // VERIFICAR SEGUNDO CAPTCHA
+    // ============================================================
+    // Esperar 2 segundos para que el modal del CAPTCHA aparezca
+    await page.waitForTimeout(2000);
+    
+    const segundoModalVisible = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
+    
+    if (segundoModalVisible) {
+      console.log("🔍 SEGUNDO CAPTCHA detectado, resolviendo...");
+      await resolverCaptcha(page, "segundo CAPTCHA");
+      console.log("✅ SEGUNDO CAPTCHA resuelto");
+      
+      // Después de resolver el CAPTCHA, el PDF se descarga automáticamente
+      // Esperar la respuesta del PDF
+      const pdfResponse = await pdfResponsePromise;
+      const pdfBuffer = await pdfResponse.body();
+      
+      if (pdfBuffer && pdfBuffer.length > 0) {
+        console.log(`✅ PDF obtenido (${pdfBuffer.length} bytes)`);
+        await browser.close();
+        response.setHeader("Content-Type", "application/pdf");
+        response.setHeader("Content-Disposition", `attachment; filename="recibo-${parsed.data.numeroServicio}.pdf"`);
+        return response.send(pdfBuffer);
+      }
+    }
+
+    // ============================================================
+    // CAPTURAR EL PDF
+    // ============================================================
+    // Si no hubo segundo CAPTCHA, la respuesta ya debería estar llegando
+    const pdfResponse = await pdfResponsePromise;
     const pdfBuffer = await pdfResponse.body();
 
     if (!pdfBuffer || pdfBuffer.length < 100) {
@@ -278,7 +347,7 @@ app.post("/obtener-recibo", async (request, response) => {
 
     // Verificar que es un PDF válido
     if (pdfBuffer.toString('utf8', 0, 4) !== '%PDF') {
-      // Intentar buscar el PDF en la respuesta si no es directo
+      // Intentar buscar el PDF en el HTML
       const html = await page.content();
       const pdfMatch = html.match(/https?:\/\/[^\s"']+\.pdf/);
       if (pdfMatch) {
@@ -292,6 +361,7 @@ app.post("/obtener-recibo", async (request, response) => {
         const pdfBuffer2 = await pdfFetch.arrayBuffer();
         if (pdfBuffer2 && pdfBuffer2.byteLength > 0) {
           console.log(`✅ PDF descargado desde URL (${pdfBuffer2.byteLength} bytes)`);
+          await browser.close();
           response.setHeader("Content-Type", "application/pdf");
           response.setHeader("Content-Disposition", `attachment; filename="recibo-${parsed.data.numeroServicio}.pdf"`);
           return response.send(Buffer.from(pdfBuffer2));
