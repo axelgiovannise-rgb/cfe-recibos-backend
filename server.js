@@ -246,6 +246,9 @@ app.post("/obtener-recibo", async (request, response) => {
 
         console.log("📝 Llenando formulario...");
 
+        // ============================================================
+        // LLENAR CAMPOS
+        // ============================================================
         const nombre = parsed.data.nombreCompleto;
         const rpu = parsed.data.numeroServicio;
         const lada = parsed.data.lada || "55";
@@ -256,10 +259,30 @@ app.post("/obtener-recibo", async (request, response) => {
         await safeFill(page, "#MainContent_txtRPU", rpu);
         await safeFill(page, "#MainContent_tbLada", lada);
         await safeFill(page, "#MainContent_txtTel", telefono);
-        await safeFill(page, "#MainContent_txtCorreoElectronico", correo);
 
-        if (parsed.data.celular) {
-          await safeFill(page, "#MainContent_txtCel", parsed.data.celular);
+        // ============================================================
+        // BUSCAR CORREO CON SELECTORES ALTERNATIVOS
+        // ============================================================
+        const correoSelectores = [
+          "#MainContent_txtCorreoElectronico",
+          "#MainContent_txtCorreo",
+          "#MainContent_txtEmail",
+          "input[placeholder*='ejemplo']",
+          "input[type='email']",
+        ];
+
+        let correoLlenado = false;
+        for (const selector of correoSelectores) {
+          const llenado = await safeFill(page, selector, correo);
+          if (llenado) {
+            correoLlenado = true;
+            console.log(`✅ Correo llenado con: ${selector}`);
+            break;
+          }
+        }
+
+        if (!correoLlenado) {
+          console.log("⚠️ No se encontró el campo de correo");
         }
 
         console.log("🔄 Enviando formulario...");
@@ -281,7 +304,6 @@ app.post("/obtener-recibo", async (request, response) => {
         let captchaResuelto = false;
         let botonEncontrado = false;
 
-        // Esperar la tabla de recibos
         for (let i = 0; i < 30; i++) {
           await page.waitForTimeout(2000);
           
@@ -317,16 +339,10 @@ app.post("/obtener-recibo", async (request, response) => {
 
         console.log("📄 Descargando PDF...");
 
-        // ============================================================
-        // HACER CLIC EN EL BOTÓN PDF
-        // ============================================================
         console.log("🔄 Haciendo clic en el botón PDF...");
         await page.click('#MainContent_GVHistorial_DescargaPDF_0');
         console.log("✅ Clic en PDF ejecutado");
 
-        // ============================================================
-        // DETECTAR CAPTCHA DESPUÉS DEL CLIC EN PDF
-        // ============================================================
         await page.waitForTimeout(3000);
         
         const captchaModal = await page.locator('#myModalRevisarNumero').isVisible().catch(() => false);
@@ -337,9 +353,6 @@ app.post("/obtener-recibo", async (request, response) => {
           console.log("✅ CAPTCHA resuelto");
         }
 
-        // ============================================================
-        // CAPTURAR EL PDF
-        // ============================================================
         try {
           const pdfResponsePromise = page.waitForResponse(
             response => {
